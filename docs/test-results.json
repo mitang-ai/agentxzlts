@@ -1,0 +1,44 @@
+{
+  "runner": "Playwright",
+  "target": "Next.js production build / PostgreSQL / private storage",
+  "results": [
+    {
+      "title": "完整双账号协作：邀请、实时、重连、回复、任务、文件、主持人和退出",
+      "expected_status": "passed",
+      "actual_status": "passed",
+      "duration_ms": 9160
+    },
+    {
+      "title": "移动端单页流程：注册、房间、聊天、任务、文件、返回和登录",
+      "expected_status": "passed",
+      "actual_status": "passed",
+      "duration_ms": 2428
+    },
+    {
+      "title": "历史分页、持久化引用、未读与鉴权图片预览",
+      "expected_status": "passed",
+      "actual_status": "passed",
+      "duration_ms": 5107
+    }
+  ],
+  "stats": {
+    "startTime": "2026-09-30T18:09:30.907Z",
+    "duration": 17794.319,
+    "expected": 3,
+    "skipped": 0,
+    "unexpected": 0,
+    "flaky": 0
+  },
+  "unit_and_database": {
+    "passed": 17,
+    "failed": 0,
+    "skipped": 0
+  },
+  "typecheck": "passed",
+  "build": "passed",
+  "frozen_install": "passed",
+  "production_dependency_audit": {
+    "vulnerabilities": 0
+  },
+  "persistent_database_restart": "passed"
+}

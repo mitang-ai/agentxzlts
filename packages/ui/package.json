@@ -1,0 +1,9 @@
+{
+  "name": "@island/ui",
+  "version": "0.3.0",
+  "private": true,
+  "exports": "./src/index.tsx",
+  "peerDependencies": {
+    "react": "^19.2.0"
+  }
+}
