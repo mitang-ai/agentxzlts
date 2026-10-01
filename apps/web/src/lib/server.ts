@@ -1,15 +1,14 @@
 import "server-only";
 import { Pool, type PoolClient } from "pg";
 import { cookies } from "next/headers";
-import {
-  createHash,
-  randomBytes,
-  scryptSync,
-  timingSafeEqual,
-} from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { resolve } from "node:path";
 import { mkdir, writeFile, readFile, unlink } from "node:fs/promises";
 import { createClient } from "@supabase/supabase-js";
+import { applyRuntimeConfig } from "@island/runtime";
+import { passwordHash, verifyPassword } from "@island/runtime/password";
+export { passwordHash, verifyPassword };
+applyRuntimeConfig();
 const globals = globalThis as unknown as {
   islandPool?: Pool;
   islandPoolErrorBound?: boolean;
@@ -26,17 +25,6 @@ if (!globals.islandPoolErrorBound) {
   globals.islandPoolErrorBound = true;
 }
 export const hash = (s: string) => createHash("sha256").update(s).digest("hex");
-export function passwordHash(password: string) {
-  const salt = randomBytes(16).toString("hex");
-  return `${salt}:${scryptSync(password, salt, 64).toString("hex")}`;
-}
-export function verifyPassword(password: string, value: string) {
-  const [salt, key] = value.split(":");
-  return timingSafeEqual(
-    Buffer.from(key, "hex"),
-    scryptSync(password, salt, 64),
-  );
-}
 export class AppError extends Error {
   constructor(
     public status: number,

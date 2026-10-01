@@ -2,6 +2,8 @@
 
 ## 本地使用与首位管理员
 
+推荐先使用 [安装引导](installation.md)：`install.cmd` / `./install.sh` 或 `npm run setup`，在向导中直接设置首位管理员并完成环境、数据库和网站安装。已有管理员时保留原账号。下面是手工授权方式。
+
 要求 Node.js ≥22，普通用户运行数据库。Linux/macOS 已验收；Windows 可使用 WSL，npm 包提供 Windows x64 数据库二进制但本次未在 Windows 实机验收。
 
 首次安装在仓库根目录运行 `npm ci`，终端一 `npm run db:start`，终端二 `npm run dev`。访问 http://localhost:3000 注册自己的账号，然后在第三个终端、仓库根目录执行：

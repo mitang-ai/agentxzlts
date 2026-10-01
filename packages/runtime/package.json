@@ -1,0 +1,16 @@
+{
+  "name": "@island/runtime",
+  "version": "0.4.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./config.mjs"
+    },
+    "./password": {
+      "types": "./password.d.ts",
+      "default": "./password.mjs"
+    }
+  }
+}

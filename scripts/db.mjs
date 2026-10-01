@@ -1,53 +1,33 @@
-import EmbeddedPostgres from "embedded-postgres";
-import { mkdir, access } from "node:fs/promises";
-import { resolve } from "node:path";
+import { applyRuntimeConfig } from "../packages/runtime/config.mjs";
+import { startEmbedded } from "./database.mjs";
 import { migrate } from "./migrate.mjs";
-const root = process.cwd();
-const data = process.env.PG_DATA_DIR || resolve(root, ".data/postgres");
-const port = Number(process.env.PG_PORT || 55432);
-const server = new EmbeddedPostgres({
-  databaseDir: data,
-  user: "island",
-  password: "local-development-only",
-  port,
-  persistent: true,
-  createPostgresUser: false,
-  onLog: (message) => {
-    if (/ERROR|FATAL/.test(message)) console.error(message);
-  },
-  onError: console.error,
-});
-await mkdir(resolve(root, ".data"), { recursive: true });
+const config = applyRuntimeConfig();
+let server;
 try {
-  await access(resolve(data, "PG_VERSION"));
-} catch (error) {
-  if (error.code !== "ENOENT") throw error;
-  await server.initialise();
-}
-await server.start();
-
-try {
-  await migrate(
-    process.env.DATABASE_URL ||
-      `postgresql://island:local-development-only@127.0.0.1:${port}/postgres`,
-  );
+  server = await startEmbedded(config);
+  await migrate(config.env.DATABASE_URL);
   console.log(
-    `PostgreSQL ready on 127.0.0.1:${port}. Persistent data: ${data}`,
+    server
+      ? `PostgreSQL ready on 127.0.0.1:${config.env.PG_PORT}. Persistent data: ${config.env.PG_DATA_DIR}`
+      : "已有 PostgreSQL 连接与迁移完成；未启动内置数据库。",
   );
 } catch (e) {
-  console.error(e);
-  await server.stop();
+  await server?.stop().catch(() => {});
+  console.error(
+    "数据库启动或迁移失败：",
+    e.code || e.message?.replace(/postgres(?:ql)?:\/\/\S+/g, "[数据库连接]"),
+  );
   process.exitCode = 1;
 }
-if (!process.exitCode) {
-  let shuttingDown = false;
+if (server && !process.exitCode) {
+  let stopping = false;
   const stop = async () => {
-    if (shuttingDown) return;
-    shuttingDown = true;
+    if (stopping) return;
+    stopping = true;
     await server.stop();
     process.exit(0);
   };
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
-  setInterval(() => {}, 60_000);
+  setInterval(() => {}, 60000);
 }

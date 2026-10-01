@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { repositoryRoot } from "@island/runtime";
 import { cookies } from "next/headers";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -142,7 +143,14 @@ async function handle(
     }
     if (key === "health") {
       await pool.query("select 1");
-      return NextResponse.json({ ok: true });
+      const installation = await pool.query(
+        "select id from app_installation where singleton",
+      );
+      return NextResponse.json({
+        ok: true,
+        installation_id: installation.rows[0]?.id || null,
+        instance_key: hash(repositoryRoot()).slice(0, 24),
+      });
     }
     if (key === "auth/register" || key === "auth/login") {
       if (!mutating) throw new AppError(405, "请求方式无效");

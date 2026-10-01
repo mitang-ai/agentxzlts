@@ -1,5 +1,7 @@
 import pg from "pg";
 import { randomUUID } from "node:crypto";
+import { applyRuntimeConfig } from "../packages/runtime/config.mjs";
+applyRuntimeConfig();
 const email = process.argv[2]?.trim().toLowerCase();
 if (!email)
   throw new Error(
@@ -30,7 +32,10 @@ try {
     "insert into admin_audit_logs(admin_id,action,target_type,target_id,reason,trace_id) values($1::uuid,'bootstrap_admin','administrator',$1::uuid::text,'服务器操作员初始化首位超级管理员',$2)",
     [user.id, randomUUID()],
   );
-  await db.query("select control_emit('admin.updated',$1::uuid,$1::uuid::text)", [user.id]);
+  await db.query(
+    "select control_emit('admin.updated',$1::uuid,$1::uuid::text)",
+    [user.id],
+  );
   await db.query("commit");
   console.log(
     "超级管理员已初始化。使用该账号登录 /admin；没有内置或默认管理员密码。",

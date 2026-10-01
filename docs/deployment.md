@@ -2,6 +2,8 @@
 
 ## 推荐部署：常驻 Node 服务 + PostgreSQL + 私有对象目录
 
+可使用 [安装引导](installation.md) 自动检测、验证和保存统一地址配置，并完成迁移、首位管理员、构建与启动。原有独立 PostgreSQL、反向代理及进程管理方式仍适用。
+
 当前已验证开发数据库和生产 Next.js 服务。公开域名、HTTPS 证书、生产数据库及宿主属于实际部署配置，不能由本次本地验收证明上线完成。
 
 1. 准备 PostgreSQL 17+ 与持久化目录。应用数据库连接必须有初始化 schema/function、管理应用会话、存储元数据以及 SET ROLE authenticated 的权限。运行时不要向客户端暴露 DATABASE_URL。
@@ -17,7 +19,7 @@
 | SUPABASE_SERVICE_ROLE_KEY | 可选 Storage 服务凭据，只在服务端配置                                               |
 
 4. `npm run build`，以 systemd、容器或受管常驻服务运行 `npm start`。挂载 STORAGE_DIR，保证应用用户有读写权限。
-5. 反向代理终止 HTTPS、限制上传请求体为 11MB，关闭 SSE 路径缓冲/缓存，设置 SSE 读超时至少 30 分钟。转发真实来源 IP，并覆盖外部伪造的 forwarded 头。`APP_ORIGIN` 必须与浏览器地址严格一致。
+5. 反向代理终止 HTTPS，上传请求体上限匹配后台允许的单文件大小并留 multipart 开销（默认 10MB，可配置至 500MB），关闭 SSE 路径缓冲/缓存，设置 SSE 读超时至少 30 分钟。转发真实来源 IP，并覆盖外部伪造的 forwarded 头。`APP_ORIGIN` 必须与浏览器地址严格一致。
 6. 检查 `/api/health`，再用两独立浏览器完成邀请、消息、断线恢复、任务、文件和主持人转移。`E2E_BASE_URL` 支持指向实际部署站点。
 
 `npm run db:start` 的固定开发密码和内置 DSN只用于回环开发环境；生产启动时设置真实 DATABASE_URL，禁止沿用开发凭据或把开发数据库绑定到公网。开发 DB runner 不用于生产服务器。

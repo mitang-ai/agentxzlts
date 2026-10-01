@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { readFile, readdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { createHash } from "node:crypto";
+import { applyRuntimeConfig } from "../packages/runtime/config.mjs";
 export async function migrate(connectionString) {
   const pool = new pg.Pool({ connectionString });
   const db = await pool.connect();
@@ -67,7 +68,6 @@ export async function migrate(connectionString) {
   }
 }
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  if (!process.env.DATABASE_URL)
-    throw new Error("Set DATABASE_URL for the target PostgreSQL database");
+  applyRuntimeConfig();
   await migrate(process.env.DATABASE_URL);
 }

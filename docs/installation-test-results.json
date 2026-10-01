@@ -1,0 +1,90 @@
+{
+  "target": "production build / actual PostgreSQL / standalone installer / private storage",
+  "results": [
+    {
+      "title": "双前台实时联动：冻结、主持人、文件、邀请、任务开关、举报、封禁与审计",
+      "expected_status": "passed",
+      "actual_status": "passed",
+      "duration_ms": 7617
+    },
+    {
+      "title": "品牌、SEO、上传策略、公告、注册与维护设置真实生效",
+      "expected_status": "passed",
+      "actual_status": "passed",
+      "duration_ms": 13956
+    },
+    {
+      "title": "管理员角色、敏感访问、IP、CSV 与手机应急页面",
+      "expected_status": "passed",
+      "actual_status": "passed",
+      "duration_ms": 1372
+    },
+    {
+      "title": "系统 Event 游标、运营 CSV 与安全清理维护工具",
+      "expected_status": "passed",
+      "actual_status": "passed",
+      "duration_ms": 194
+    },
+    {
+      "title": "完整双账号协作：邀请、实时、重连、回复、任务、文件、主持人和退出",
+      "expected_status": "passed",
+      "actual_status": "passed",
+      "duration_ms": 9287
+    },
+    {
+      "title": "移动端单页流程：注册、房间、聊天、任务、文件、返回和登录",
+      "expected_status": "passed",
+      "actual_status": "passed",
+      "duration_ms": 2640
+    },
+    {
+      "title": "历史分页、持久化引用、未读与鉴权图片预览",
+      "expected_status": "passed",
+      "actual_status": "passed",
+      "duration_ms": 5974
+    },
+    {
+      "title": "全新内置 PostgreSQL 自动配置、安装窗口关闭后运行及启动文件恢复",
+      "expected_status": "passed",
+      "actual_status": "passed",
+      "duration_ms": 35560
+    },
+    {
+      "title": "环境检测、连接验证、管理员与网站配置，安装后前后台共用新地址",
+      "expected_status": "passed",
+      "actual_status": "passed",
+      "duration_ms": 33919
+    },
+    {
+      "title": "保留数据升级、安装锁、停止与重新启动使用保存配置",
+      "expected_status": "passed",
+      "actual_status": "passed",
+      "duration_ms": 15325
+    },
+    {
+      "title": "手机环境检测与数据库配置页面不溢出",
+      "expected_status": "passed",
+      "actual_status": "passed",
+      "duration_ms": 735
+    }
+  ],
+  "stats": {
+    "startTime": "2026-10-01T09:16:01.065Z",
+    "duration": 128839.848,
+    "expected": 11,
+    "skipped": 0,
+    "unexpected": 0,
+    "flaky": 0
+  },
+  "unit_and_database": {
+    "passed": 54,
+    "failed": 0,
+    "skipped": 0
+  },
+  "typecheck": "passed",
+  "build": "passed",
+  "production_dependency_audit": {
+    "vulnerabilities": 0
+  },
+  "portable_node_bootstrap": "official HTTPS download + SHA256 + private runtime startup passed on Linux x64"
+}
