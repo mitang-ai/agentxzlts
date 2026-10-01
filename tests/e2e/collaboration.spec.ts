@@ -1,5 +1,55 @@
 import { test, expect, type Page, type BrowserContext } from "@playwright/test";
+import { Pool } from "pg";
+import { resolve } from "node:path";
+import { unlink } from "node:fs/promises";
 const suffix = Date.now();
+const fixtureEmails: string[] = [];
+test.afterAll(async () => {
+  const db = new Pool({
+    connectionString:
+      process.env.DATABASE_URL ||
+      "postgresql://island:local-development-only@127.0.0.1:55432/postgres",
+  });
+  try {
+    const ids = (
+      await db.query("select id from profiles where email=any($1)", [
+        fixtureEmails,
+      ])
+    ).rows.map((r) => r.id);
+    const objects = (
+      await db.query(
+        "select storage_path from files where room_id in(select id from rooms where created_by=any($1::uuid[]))",
+        [ids],
+      )
+    ).rows;
+    await db.query("delete from rooms where created_by=any($1::uuid[])", [ids]);
+    for (const o of objects) {
+      await unlink(
+        resolve(process.env.E2E_STORAGE_DIR || ".data/files", o.storage_path),
+      ).catch(() => {});
+      await db.query("delete from storage.objects where name=$1", [
+        o.storage_path,
+      ]);
+      await db.query("delete from storage_cleanup_jobs where path=$1", [
+        o.storage_path,
+      ]);
+    }
+    await db.query(
+      "delete from realtime_connections where user_id=any($1::uuid[])",
+      [ids],
+    );
+    await db.query(
+      "delete from realtime_stream_log where user_id=any($1::uuid[])",
+      [ids],
+    );
+    await db.query("delete from login_events where user_id=any($1::uuid[])", [
+      ids,
+    ]);
+    await db.query("delete from auth.users where id=any($1::uuid[])", [ids]);
+  } finally {
+    await db.end();
+  }
+});
 async function capture(page: Page, path: string) {
   await page
     .locator(".toast")
@@ -11,6 +61,7 @@ async function capture(page: Page, path: string) {
 }
 
 async function register(page: Page, name: string, email: string) {
+  fixtureEmails.push(email);
   await page.goto("/");
   if (name === "Teddy") {
     await expect(

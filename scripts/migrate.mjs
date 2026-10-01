@@ -1,4 +1,5 @@
 import pg from "pg";
+import { fileURLToPath } from "node:url";
 import { readFile, readdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { createHash } from "node:crypto";
@@ -65,7 +66,7 @@ export async function migrate(connectionString) {
     await pool.end();
   }
 }
-if (process.argv[1] === new URL(import.meta.url).pathname) {
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
   if (!process.env.DATABASE_URL)
     throw new Error("Set DATABASE_URL for the target PostgreSQL database");
   await migrate(process.env.DATABASE_URL);

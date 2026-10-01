@@ -5,7 +5,6 @@ import { z } from "zod";
 import {
   accountSchema,
   roomSchema,
-  MAX_FILE_SIZE,
   validateFile,
   safeFileName,
 } from "@island/protocol";
@@ -27,6 +26,15 @@ import {
 } from "@/lib/server";
 import { subscribe } from "@/lib/realtime";
 import { scanFile } from "@/lib/scanner";
+import {
+  publicSite,
+  settings,
+  capabilities,
+  checkIp,
+  requestIp,
+  loginEvent,
+  recordMetric,
+} from "@/lib/control";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 const uuid = z.uuid();
@@ -39,6 +47,16 @@ const messages: Record<string, string> = {
   INVALID_TARGET: "请选择有效成员",
   INVALID_ASSIGNEE: "负责人必须是当前房间成员",
   INVALID_ATTACHMENT: "附件无效",
+  ACCOUNT_BANNED: "账号已被封禁",
+  MAINTENANCE: "网站正在维护",
+  ROOM_FROZEN: "房间已冻结，当前只读",
+  ROOM_DISABLED: "当前不可创建房间",
+  POST_DISABLED: "当前账号被限制发言",
+  TASK_DISABLED: "任务功能暂不可用",
+  UPLOAD_DISABLED: "当前不可上传文件",
+  STORAGE_LIMIT: "文件大小或房间容量超过限制",
+  FILE_TYPE_DISABLED: "此文件类型未开放上传",
+  FILE_UNAVAILABLE: "文件已被隔离或删除",
   RATE_LIMITED: "操作太频繁，请稍后再试",
 };
 const loginLimits = new Map<string, { count: number; expires: number }>();
@@ -84,6 +102,7 @@ async function handle(
   ctx: { params: Promise<{ path: string[] }> },
 ) {
   try {
+    await checkIp(req);
     const { path } = await ctx.params;
     const key = path.join("/");
     const mutating = req.method === "POST";
@@ -94,6 +113,32 @@ async function handle(
         throw new AppError(403, "请求来源无效");
       if (req.headers.get("x-island-request") !== "1")
         throw new AppError(403, "请求校验失败");
+    }
+    if (key === "site") {
+      const after = z.coerce
+        .number()
+        .int()
+        .min(0)
+        .parse(req.nextUrl.searchParams.get("after") || 0);
+      return NextResponse.json(await publicSite(after), {
+        headers: { "Cache-Control": "no-store" },
+      });
+    }
+    if (path[0] === "brand" && path[1] && !mutating) {
+      const asset = (
+        await pool.query(
+          "select mime_type,bytes from brand_assets where id=$1",
+          [uuid.parse(path[1])],
+        )
+      ).rows[0];
+      if (!asset) throw new AppError(404, "品牌资源不存在");
+      return new Response(new Uint8Array(asset.bytes), {
+        headers: {
+          "Content-Type": asset.mime_type,
+          "Cache-Control": "public,max-age=31536000,immutable",
+          "X-Content-Type-Options": "nosniff",
+        },
+      });
     }
     if (key === "health") {
       await pool.query("select 1");
@@ -106,10 +151,24 @@ async function handle(
       const email = input.email.toLowerCase();
       let id: string;
       if (key === "auth/register") {
+        const ops = (await settings()).operations;
+        if (!ops.registration || ops.maintenance)
+          throw new AppError(
+            403,
+            ops.maintenance ? "网站正在维护" : "网站暂未开放注册",
+          );
         if (!input.display_name) throw new AppError(400, "请输入昵称");
         const db = await pool.connect();
         try {
           await db.query("begin");
+          await db.query("select pg_advisory_xact_lock_shared(91820261001)");
+          const current = (
+            await db.query(
+              "select value from site_settings where key='operations'",
+            )
+          ).rows[0].value;
+          if (!current.registration || current.maintenance)
+            throw new AppError(403, "网站暂未开放注册");
           id = randomUUID();
           await db.query(
             "insert into auth.users(id,email,raw_user_meta_data) values($1,$2,$3)",
@@ -134,18 +193,44 @@ async function handle(
           [email],
         );
         if (!rows[0]) {
+          await loginEvent(req, email, false);
           passwordHash(input.password);
           throw new AppError(401, "邮箱或密码错误");
         }
-        if (!verifyPassword(input.password, rows[0].password_hash))
+        if (!verifyPassword(input.password, rows[0].password_hash)) {
+          await loginEvent(req, email, false, rows[0].id);
           throw new AppError(401, "邮箱或密码错误");
+        }
+        const st = (
+          await pool.query("select effective_status($1) status", [rows[0].id])
+        ).rows[0].status;
+        if (st === "banned") {
+          await loginEvent(req, email, false, rows[0].id);
+          throw new AppError(403, "账号已被封禁");
+        }
         id = rows[0].id;
       }
-      await setSession(id);
+      await setSession(id, {
+        ip: requestIp(req),
+        userAgent: req.headers.get("user-agent") || "",
+      });
+      await loginEvent(req, email, true, id);
       return NextResponse.json({ user: await identity() });
     }
     const user = await identity();
     if (key === "auth/me") return NextResponse.json({ user });
+    if (key !== "auth/logout") {
+      const ops = (await settings()).operations;
+      if (
+        ops.maintenance &&
+        !(
+          await pool.query("select 1 from admin_members where user_id=$1", [
+            user.id,
+          ])
+        ).rowCount
+      )
+        throw new AppError(503, ops.maintenance_message);
+    }
     if (key === "auth/logout" && mutating) {
       const jar = await cookies();
       const token = jar.get("island_session")?.value;
@@ -180,7 +265,7 @@ async function handle(
         async (db) =>
           (
             await db.query(
-              `select t.*,r.name room_name,r.icon room_icon,coalesce((select jsonb_agg(jsonb_build_object('participant_id',a.participant_id)) from task_assignees a where a.task_id=t.id),'[]') task_assignees from tasks t join rooms r on r.id=t.room_id where exists(select 1 from task_assignees a join participants p on p.id=a.participant_id where a.task_id=t.id and p.user_id=$1) order by t.created_at desc`,
+              `select t.*,r.name room_name,r.icon room_icon,coalesce((select jsonb_agg(jsonb_build_object('participant_id',a.participant_id)) from task_assignees a where a.task_id=t.id),'[]') task_assignees from tasks t join rooms r on r.id=t.room_id where flag_enabled('tasks',auth.uid(),t.room_id) and exists(select 1 from task_assignees a join participants p on p.id=a.participant_id where a.task_id=t.id and p.user_id=$1) order by t.created_at desc`,
               [user.id],
             )
           ).rows,
@@ -195,6 +280,7 @@ async function handle(
         })
         .parse(await jsonBody(req));
       const allowed = [
+        "report",
         "create_room",
         "join_invite",
         "update_room",
@@ -246,6 +332,13 @@ async function handle(
                 ).rows,
             )
           : [];
+      if (body.command === "report")
+        z.object({
+          room_id: z.uuid(),
+          target_id: z.uuid(),
+          target_type: z.enum(["message", "file", "user", "room"]),
+          reason: z.string().trim().min(3).max(2000),
+        }).parse(body.data);
       const result = await command(user, body.command, body.data);
       for (const f of cleanup)
         await removeFile(f.storage_path).catch(() =>
@@ -275,6 +368,15 @@ async function handle(
           );
           return NextResponse.json({ events });
         }
+        const streamId = randomUUID();
+        await pool.query(
+          "insert into realtime_connections(id,user_id,room_id) values($1,$2,$3)",
+          [streamId, user.id, roomId],
+        );
+        await pool.query(
+          "insert into realtime_stream_log(id,user_id,room_id,recovered_cursor) values($1,$2,$3,$4)",
+          [streamId, user.id, roomId, after > 0],
+        );
         const sessionToken =
           (await cookies()).get("island_session")?.value || "";
         const encoder = new TextEncoder();
@@ -310,6 +412,10 @@ async function handle(
                   close();
                   return;
                 }
+                await pool.query(
+                  "update realtime_connections set last_seen_at=now() where id=$1",
+                  [streamId],
+                );
                 await ensureRoom(user, roomId);
                 let batch;
                 do {
@@ -357,6 +463,17 @@ async function handle(
               clearInterval(timer);
               clearTimeout(lifetime);
               unsubscribe();
+              void pool
+                .query(
+                  "update realtime_stream_log set closed_at=now() where id=$1",
+                  [streamId],
+                )
+                .catch(() => {});
+              void pool
+                .query("delete from realtime_connections where id=$1", [
+                  streamId,
+                ])
+                .catch(() => {});
               req.signal.removeEventListener("abort", close);
               try {
                 controller.close();
@@ -397,24 +514,35 @@ async function handle(
         return NextResponse.json({ invites });
       }
       if (path[2] === "files" && mutating) {
-        if (
-          Number(req.headers.get("content-length") || 0) >
-          MAX_FILE_SIZE + 100000
-        )
-          throw new AppError(413, "文件不能超过 10MB");
-        const raw = await readBody(req, MAX_FILE_SIZE + 100000);
+        const ops = (await settings()).operations;
+        const caps = await capabilities(user, roomId);
+        if (!caps.uploads) throw new AppError(403, "当前不可上传文件");
+        const room = (
+          await pool.query("select status from rooms where id=$1", [roomId])
+        ).rows[0];
+        if (room.status !== "active") throw new AppError(403, "房间当前只读");
+        const maxSize = ops.max_file_mb * 1048576;
+        if (Number(req.headers.get("content-length") || 0) > maxSize + 100000)
+          throw new AppError(413, `文件不能超过 ${ops.max_file_mb}MB`);
+        const raw = await readBody(req, maxSize + 100000);
         const form = await new Response(new Uint8Array(raw), {
           headers: { "Content-Type": req.headers.get("content-type") || "" },
         }).formData();
         const file = form.get("file");
         if (
           !(file instanceof File) ||
-          !validateFile(file.name, file.type, file.size)
+          !validateFile(file.name, file.type, file.size, maxSize)
         )
           throw new AppError(
             400,
-            "支持图片、PDF、文本、Office 和 ZIP，最大 10MB",
+            `文件格式或大小无效（最大 ${ops.max_file_mb}MB）`,
           );
+        if (
+          !ops.allowed_extensions.includes(
+            file.name.split(".").pop()?.toLowerCase(),
+          )
+        )
+          throw new AppError(400, "此文件类型未开放上传");
         const bytes = Buffer.from(await file.arrayBuffer());
         if (!validContent(bytes, file.type))
           throw new AppError(400, "文件内容与类型不一致");
@@ -498,7 +626,10 @@ async function handle(
           },
           true,
         );
-        return NextResponse.json(state);
+        return NextResponse.json({
+          ...state,
+          capabilities: await capabilities(user, roomId),
+        });
       }
     }
     if (path[0] === "files" && path[1]) {
@@ -509,6 +640,11 @@ async function handle(
           (await db.query("select * from files where id=$1", [id])).rows[0],
       );
       if (!file) throw new AppError(403, "你没有访问此文件的权限");
+      if (file.status !== "normal")
+        throw new AppError(
+          403,
+          file.status === "quarantined" ? "文件已被隔离" : "文件已被删除",
+        );
       const bytes = await loadFile(file.storage_path);
       const preview =
         req.nextUrl.searchParams.get("preview") === "1" &&
@@ -517,6 +653,7 @@ async function handle(
         headers: {
           "Content-Type": preview ? file.mime_type : "application/octet-stream",
           "Content-Disposition": `${preview ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(file.name)}`,
+          "Content-Length": String(bytes.length),
           "Cache-Control": "private, no-store",
           "X-Content-Type-Options": "nosniff",
         },
@@ -553,5 +690,24 @@ async function handle(
     );
   }
 }
-export const GET = handle;
-export const POST = handle;
+async function measured(
+  req: NextRequest,
+  ctx: { params: Promise<{ path: string[] }> },
+) {
+  const start = performance.now(),
+    trace = randomUUID();
+  const res = await handle(req, ctx);
+  res.headers.set("X-Trace-ID", trace);
+  const userId = (await identity().catch(() => null))?.id || null;
+  await recordMetric(
+    req,
+    res.status,
+    start,
+    trace,
+    userId,
+    Number(res.headers.get("content-length") || 0),
+  );
+  return res;
+}
+export const GET = measured;
+export const POST = measured;

@@ -38,7 +38,9 @@ import {
   CheckCircle2,
   Clock,
   Loader2,
+  Flag,
 } from "lucide-react";
+import { useSite, SiteBrand, SiteFooter } from "@/components/SiteProvider";
 import { ParticipantAvatar } from "@island/ui";
 import {
   canManage,
@@ -116,14 +118,7 @@ function Empty({
   );
 }
 function Brand() {
-  return (
-    <span className="brand">
-      <span className="brand-mark">
-        <House size={20} />
-      </span>
-      协作岛
-    </span>
-  );
+  return <SiteBrand />;
 }
 function Auth({
   onLogin,
@@ -132,6 +127,7 @@ function Auth({
   onLogin: (u: User) => void;
   notify: (s: string) => void;
 }) {
+  const site = useSite();
   const [register, setRegister] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -146,6 +142,7 @@ function Auth({
         values,
       );
       onLogin(user);
+      window.dispatchEvent(new Event("island:session"));
       notify(register ? "欢迎来到协作岛" : "欢迎回来");
     } catch (e) {
       setError((e as Error).message);
@@ -165,13 +162,9 @@ function Auth({
           <h1>
             一个人，是想法。
             <br />
-            一群人，是<span>协作岛。</span>
+            一群人，是<span>{site.config.brand.name}。</span>
           </h1>
-          <p>
-            聊聊新点子，分享一份文件，
-            <br />
-            也让每一件小事，都找到负责的人。
-          </p>
+          <p>{site.config.brand.intro}</p>
           <div className="intro-points">
             <span>
               <MessageCircle size={18} /> 聊在一起
@@ -198,6 +191,10 @@ function Auth({
               登录
             </button>
             <button
+              disabled={
+                !site.config.operations.registration ||
+                site.config.operations.maintenance
+              }
               className={register ? "active" : ""}
               onClick={() => {
                 setRegister(true);
@@ -249,7 +246,7 @@ function Auth({
             )}
             <button className="primary full" disabled={busy}>
               {busy ? <Loader2 className="spin" size={17} /> : null}
-              {register ? "创建账号" : "登录协作岛"}
+              {register ? "创建账号" : `登录${site.config.brand.name}`}
               <ArrowRight size={17} />
             </button>
           </form>
@@ -261,10 +258,12 @@ function Auth({
         </section>
       </div>
       <footer>把想法放在一起，把事情一起做好。</footer>
+      <SiteFooter />
     </main>
   );
 }
 export default function Island() {
+  const site = useSite();
   const [user, setUser] = useState<User | null>(null);
   const [initial, setInitial] = useState(true);
   const [toast, setToast] = useState("");
@@ -521,6 +520,43 @@ export default function Island() {
         .then((r) => setGlobalTasks(r.tasks))
         .catch((e) => notify(e.message));
   }, [primary, user, state, notify]);
+  useEffect(() => {
+    const warning = (e: Event) =>
+      notify((e as CustomEvent).detail || "收到管理员提示");
+    window.addEventListener("island:warning", warning);
+    const expired = () => {
+      setUser(null);
+      setRoomId(null);
+      setState(null);
+      notify("登录已过期，请重新登录");
+    };
+    window.addEventListener("island:session-expired", expired);
+    return () => {
+      window.removeEventListener("island:session-expired", expired);
+      window.removeEventListener("island:warning", warning);
+    };
+  }, [notify]);
+  useEffect(() => {
+    if (site.user && user?.id === site.user.id)
+      setUser((prev) =>
+        prev &&
+        prev.display_name === site.user!.display_name &&
+        prev.avatar_url === site.user!.avatar_url
+          ? prev
+          : site.user,
+      );
+    if (user) {
+      void refreshRooms();
+      if (roomId) void load(roomId);
+    }
+  }, [site.cursor]);
+  const caps = state?.capabilities || site.capabilities;
+  const writable = state?.room.status !== "frozen";
+  useEffect(() => {
+    if (tab === "tasks" && !caps.tasks) setTab("chat");
+    if (tab === "files" && !caps.uploads) setTab("chat");
+    if (primary === "tasks" && !caps.tasks) setPrimary("chat");
+  }, [caps.tasks, caps.uploads, tab, primary]);
   const me = state?.participants.find(
     (p) => p.user_id === user?.id && p.status === "active",
   );
@@ -563,7 +599,7 @@ export default function Island() {
   }
   function send() {
     const content = draft.trim();
-    if (!content || !roomId) return;
+    if (!content || !roomId || !writable || !caps.post) return;
     const item = {
       id: crypto.randomUUID(),
       content,
@@ -584,7 +620,7 @@ export default function Island() {
     inputRef.current?.focus();
   }
   async function upload(file?: File) {
-    if (!file || !roomId) return;
+    if (!file || !roomId || !writable || !caps.uploads) return;
     setUploading(true);
     const form = new FormData();
     form.set("file", file);
@@ -600,6 +636,7 @@ export default function Island() {
     }
   }
   const startTask = (message?: Message) => {
+    if (!writable || !caps.tasks) return;
     setTask(null);
     setSource(message || null);
     setModal("task");
@@ -661,6 +698,15 @@ export default function Island() {
       </button>
     </div>
   );
+  if (site.config.operations.maintenance && !site.user?.admin_role)
+    return (
+      <main className="splash">
+        <Brand />
+        <h1>网站维护中</h1>
+        <p>{site.config.operations.maintenance_message}</p>
+        <a href="/admin">管理员入口</a>
+      </main>
+    );
   if (!user)
     return (
       <>
@@ -673,29 +719,28 @@ export default function Island() {
       className={`app ${roomId ? "room-open" : ""} ${primary === "tasks" ? "tasks-open" : ""}`}
     >
       <aside className="rail">
-        <div className="rail-brand">
-          <House size={24} />
-          <strong>协作岛</strong>
-        </div>
+        <SiteBrand rail />
         <nav>
           {[
             { key: "chat", label: "聊天", icon: <MessageCircle size={21} /> },
             { key: "rooms", label: "房间", icon: <House size={21} /> },
             { key: "tasks", label: "任务", icon: <ListTodo size={21} /> },
-          ].map((n) => (
-            <button
-              key={n.key}
-              className={primary === n.key ? "selected" : ""}
-              onClick={() => {
-                setPrimary(n.key as typeof primary);
-                if (n.key === "rooms") setRoomId(null);
-              }}
-              aria-label={n.label}
-            >
-              {n.icon}
-              <span>{n.label}</span>
-            </button>
-          ))}
+          ]
+            .filter((n) => n.key !== "tasks" || caps.tasks)
+            .map((n) => (
+              <button
+                key={n.key}
+                className={primary === n.key ? "selected" : ""}
+                onClick={() => {
+                  setPrimary(n.key as typeof primary);
+                  if (n.key === "rooms") setRoomId(null);
+                }}
+                aria-label={n.label}
+              >
+                {n.icon}
+                <span>{n.label}</span>
+              </button>
+            ))}
         </nav>
         <div className="rail-bottom">
           <button
@@ -725,6 +770,7 @@ export default function Island() {
           <button
             className="icon-button"
             aria-label="创建房间"
+            disabled={!site.capabilities.create_room}
             onClick={() => setModal("create")}
           >
             <Plus size={20} />
@@ -833,7 +879,11 @@ export default function Island() {
               在一个房间里，聊天、分工、一起完成。
             </p>
             <div className="welcome-actions">
-              <button className="primary" onClick={() => setModal("create")}>
+              <button
+                className="primary"
+                disabled={!site.capabilities.create_room}
+                onClick={() => setModal("create")}
+              >
                 <Plus size={17} />
                 创建房间
               </button>
@@ -892,6 +942,7 @@ export default function Island() {
                 {host && (
                   <button
                     className="primary compact"
+                    disabled={!writable}
                     onClick={() => setModal("invite")}
                   >
                     <Plus size={15} />
@@ -907,21 +958,37 @@ export default function Island() {
                 </button>
               </div>
             </header>
+            {!writable && (
+              <div className="room-readonly" role="status">
+                房间已冻结，当前只读
+              </div>
+            )}
+            {!caps.post && (
+              <div className="room-readonly" role="status">
+                当前账号被限制发言
+              </div>
+            )}
             <div className="tabs">
               <div>
                 {[
                   { key: "chat", label: "聊天" },
                   { key: "files", label: "文件" },
                   { key: "tasks", label: "任务" },
-                ].map((t) => (
-                  <button
-                    key={t.key}
-                    className={tab === t.key ? "active" : ""}
-                    onClick={() => setTab(t.key as typeof tab)}
-                  >
-                    {t.label}
-                  </button>
-                ))}
+                ]
+                  .filter(
+                    (t) =>
+                      t.key === "chat" ||
+                      (t.key === "tasks" ? caps.tasks : caps.uploads),
+                  )
+                  .map((t) => (
+                    <button
+                      key={t.key}
+                      className={tab === t.key ? "active" : ""}
+                      onClick={() => setTab(t.key as typeof tab)}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
               </div>
               <span className="tab-caption">
                 {tab === "chat"
@@ -1112,6 +1179,7 @@ export default function Island() {
                                 </button>
                               )}
                               <button
+                                disabled={!writable}
                                 title="回应"
                                 onClick={() =>
                                   void run("react", {
@@ -1121,6 +1189,13 @@ export default function Island() {
                                 }
                               >
                                 <Smile size={15} />
+                              </button>
+                              <button
+                                title="举报消息"
+                                aria-label={`举报消息 ${index + 1}`}
+                                onClick={() => setModal(`report:${m.id}`)}
+                              >
+                                <MoreHorizontal size={15} />
                               </button>
                               <button
                                 title="复制消息"
@@ -1134,6 +1209,8 @@ export default function Island() {
                                 <Copy size={15} />
                               </button>
                               <button
+                                hidden={!caps.tasks}
+                                disabled={!writable}
                                 title="创建任务"
                                 aria-label={`从消息创建任务 ${index + 1}`}
                                 onClick={() => startTask(m)}
@@ -1221,7 +1298,8 @@ export default function Island() {
                     <button
                       className="icon-button"
                       aria-label="上传附件"
-                      disabled={uploading}
+                      hidden={!caps.uploads}
+                      disabled={uploading || !writable}
                       onClick={() => fileRef.current?.click()}
                     >
                       {uploading ? (
@@ -1233,7 +1311,14 @@ export default function Island() {
                     <textarea
                       ref={inputRef}
                       aria-label="消息"
-                      placeholder="发送消息，让想法流动起来…"
+                      disabled={!writable || !caps.post}
+                      placeholder={
+                        !writable
+                          ? "房间已冻结，当前只读"
+                          : !caps.post
+                            ? "当前被限制发言"
+                            : "发送消息，让想法流动起来…"
+                      }
                       value={draft}
                       maxLength={8000}
                       rows={1}
@@ -1271,7 +1356,7 @@ export default function Island() {
                       <button
                         className="send-button"
                         aria-label="发送消息"
-                        disabled={!draft.trim()}
+                        disabled={!draft.trim() || !writable || !caps.post}
                         onClick={send}
                       >
                         <Send size={19} />
@@ -1344,7 +1429,8 @@ export default function Island() {
                   </div>
                   <button
                     className="primary compact"
-                    disabled={uploading}
+                    hidden={!caps.uploads}
+                    disabled={uploading || !writable}
                     onClick={() => fileRef.current?.click()}
                   >
                     <Paperclip size={16} />
@@ -1362,7 +1448,14 @@ export default function Island() {
                     </div>
                     {state.files.map((f) => (
                       <div className="file-row" key={f.id}>
-                        <a href={`/api/files/${f.id}`} className="file-name">
+                        <a
+                          href={
+                            f.status && f.status !== "normal"
+                              ? undefined
+                              : `/api/files/${f.id}`
+                          }
+                          className="file-name"
+                        >
                           <FileIcon file={f} />
                           <span>{f.name}</span>
                         </a>
@@ -1376,21 +1469,40 @@ export default function Island() {
                         <span>
                           {day(f.created_at)} {time(f.created_at)}
                         </span>
-                        <span>{size(f.size)}</span>
-                        <a
-                          href={`/api/files/${f.id}`}
-                          aria-label={`下载 ${f.name}`}
-                          className="icon-button"
-                        >
-                          <Download size={17} />
-                        </a>
+                        <span>
+                          {f.status === "quarantined"
+                            ? "已隔离"
+                            : f.status === "deleted"
+                              ? "已删除"
+                              : size(f.size)}
+                        </span>
+                        <div className="file-actions">
+                          <a
+                            href={
+                              f.status && f.status !== "normal"
+                                ? undefined
+                                : `/api/files/${f.id}`
+                            }
+                            aria-label={`下载 ${f.name}`}
+                            className="icon-button"
+                          >
+                            <Download size={17} />
+                          </a>
+                          <button
+                            className="icon-button"
+                            aria-label={`举报文件 ${f.name}`}
+                            onClick={() => setModal(`report:file:${f.id}`)}
+                          >
+                            <Flag size={15} />
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>
                 ) : (
                   <Empty icon={<FolderOpen size={32} />} title="还没有共享文件">
                     上传一份资料，让大家随时找到。支持常用文档与图片，最大
-                    10MB。
+                    {site.config.operations.max_file_mb}MB。
                   </Empty>
                 )}
               </section>
@@ -1428,6 +1540,7 @@ export default function Island() {
                   </div>
                   <button
                     className="primary compact"
+                    disabled={!writable}
                     onClick={() => startTask()}
                   >
                     <Plus size={16} />
@@ -1471,6 +1584,7 @@ export default function Island() {
                         </div>
                         {status === "pending" && (
                           <button
+                            disabled={!writable}
                             className="add-task"
                             onClick={() => startTask()}
                           >
@@ -1487,6 +1601,18 @@ export default function Island() {
           </>
         )}
       </main>
+      {modal?.startsWith("report:") && (
+        <ReportDialog
+          targetId={modal.split(":")[2] || modal.slice(7)}
+          targetType={modal.split(":")[2] ? modal.split(":")[1] : "message"}
+          roomId={roomId!}
+          onClose={() => setModal(null)}
+          onDone={() => {
+            setModal(null);
+            notify("举报已提交");
+          }}
+        />
+      )}
       <input
         ref={fileRef}
         type="file"
@@ -1590,6 +1716,15 @@ export default function Island() {
                     )}
                   </small>
                 </div>
+                {p.user_id && p.id !== me?.id && (
+                  <button
+                    className="icon-button"
+                    aria-label={`举报用户 ${p.display_name}`}
+                    onClick={() => setModal(`report:user:${p.user_id}`)}
+                  >
+                    <Flag size={15} />
+                  </button>
+                )}
                 {host && p.id !== me?.id && (
                   <div className="member-actions">
                     <button
@@ -1650,6 +1785,13 @@ export default function Island() {
               {new Date(state.room.created_at).toLocaleDateString("zh-CN")}
             </small>
           </div>
+          <button
+            className="secondary full"
+            onClick={() => setModal(`report:room:${state.room.id}`)}
+          >
+            <Flag size={15} />
+            举报房间
+          </button>
           <div className="detail-actions">
             <button onClick={() => setModal("members")}>
               <Users size={17} />
@@ -1754,6 +1896,16 @@ function FileIcon({ file }: { file: IslandFile }) {
   );
 }
 function FileBubble({ file }: { file: IslandFile }) {
+  if (file.status && file.status !== "normal")
+    return (
+      <div className="file-bubble unavailable">
+        <FileIcon file={file} />
+        <strong>{file.name}</strong>
+        <small>
+          {file.status === "quarantined" ? "文件已被隔离" : "文件已被删除"}
+        </small>
+      </div>
+    );
   return (
     <div className="file-bubble">
       {file.mime_type.startsWith("image/") && (
@@ -1975,6 +2127,7 @@ function InviteDialog({
   onClose: () => void;
   notify: (s: string) => void;
 }) {
+  const site = useSite();
   const [url, setUrl] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -2023,7 +2176,16 @@ function InviteDialog({
         <div className="form-grid">
           <label>
             有效期
-            <select aria-label="有效期" name="hours" defaultValue="168">
+            <select
+              aria-label="有效期"
+              name="hours"
+              defaultValue={String(site.config.operations.invite_days * 24)}
+            >
+              {![1, 7, 30].includes(site.config.operations.invite_days) && (
+                <option value={site.config.operations.invite_days * 24}>
+                  {site.config.operations.invite_days} 天
+                </option>
+              )}
               <option value="24">1 天</option>
               <option value="168">7 天</option>
               <option value="720">30 天</option>
@@ -2193,7 +2355,10 @@ function TaskDialog({
   onSave: (values: Record<string, unknown>) => Promise<void>;
 }) {
   const host = canManage(state.room, me);
-  const editable = !task || canUpdateTask(task, state.room, me);
+  const editable =
+    state.room.status !== "frozen" &&
+    Boolean(state.capabilities?.tasks ?? true) &&
+    (!task || canUpdateTask(task, state.room, me));
   const [assignees, setAssignees] = useState(
     task?.task_assignees.map((a) => a.participant_id) ||
       (source?.sender_participant_id ? [source.sender_participant_id] : []),
@@ -2297,7 +2462,7 @@ function TaskDialog({
                   type="checkbox"
                   aria-label={p.display_name}
                   checked={assignees.includes(p.id)}
-                  disabled={!!task && !host}
+                  disabled={!editable || (!!task && !host)}
                   onChange={(e) =>
                     setAssignees((a) =>
                       e.target.checked
@@ -2332,7 +2497,11 @@ function TaskDialog({
                   <FileText size={15} />
                   <span>{f.name}</span>
                   <a
-                    href={`/api/files/${f.id}`}
+                    href={
+                      f.status && f.status !== "normal"
+                        ? undefined
+                        : `/api/files/${f.id}`
+                    }
                     aria-label={`下载附件 ${f.name}`}
                     onClick={(e) => e.stopPropagation()}
                   >
@@ -2420,6 +2589,57 @@ function ConfirmDialog({
           {busy ? "处理中…" : "确认"}
         </button>
       </div>
+    </Modal>
+  );
+}
+
+function ReportDialog({
+  targetId,
+  targetType,
+  roomId,
+  onClose,
+  onDone,
+}: {
+  targetId: string;
+  targetType: string;
+  roomId: string;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  return (
+    <Modal title="提交举报" onClose={onClose}>
+      <form
+        onSubmit={async (e) => {
+          e.preventDefault();
+          setBusy(true);
+          try {
+            await cmd("report", {
+              room_id: roomId,
+              target_type: targetType,
+              target_id: targetId,
+              reason: new FormData(e.currentTarget).get("reason"),
+            });
+            onDone();
+          } catch (e) {
+            setError((e as Error).message);
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        <label>
+          举报原因
+          <textarea name="reason" minLength={3} maxLength={2000} required />
+        </label>
+        <ErrorLine error={error} />
+        <div className="modal-footer">
+          <button className="primary" disabled={busy}>
+            提交举报
+          </button>
+        </div>
+      </form>
     </Modal>
   );
 }

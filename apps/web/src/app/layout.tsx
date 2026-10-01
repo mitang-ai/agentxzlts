@@ -1,13 +1,22 @@
 import type { Metadata } from "next";
+import { settings } from "@/lib/control";
+import { SiteProvider } from "@/components/SiteProvider";
 import "./globals.css";
-export const metadata: Metadata = {
-  title: "协作岛 · 一起把想法做成",
-  description: "聊天、分工与文件，在一个轻松的协作空间里。",
-};
+export const dynamic = "force-dynamic";
+export async function generateMetadata(): Promise<Metadata> {
+  const config = await settings();
+  return {
+    title: config.information.title,
+    description: config.information.description,
+    icons: config.brand.favicon ? { icon: config.brand.favicon } : undefined,
+  };
+}
 export default function Layout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="zh-CN">
-      <body>{children}</body>
+      <body>
+        <SiteProvider>{children}</SiteProvider>
+      </body>
     </html>
   );
 }

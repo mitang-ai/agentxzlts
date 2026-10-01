@@ -50,24 +50,38 @@ export type Identity = {
   email: string;
   display_name: string;
   avatar_url: string | null;
+  status?: string;
+  restricted_until?: string | null;
 };
 export async function identity(): Promise<Identity> {
   const jar = await cookies();
   const token = jar.get("island_session")?.value;
   if (!token) throw new AppError(401, "请先登录");
   const { rows } = await pool.query(
-    "select p.* from auth.local_sessions s join profiles p on p.id=s.user_id where token_hash=$1 and expires_at>now()",
+    "select p.*,effective_status(p.id) status from auth.local_sessions s join profiles p on p.id=s.user_id where token_hash=$1 and expires_at>now() and effective_status(p.id)<>'banned'",
     [hash(token)],
   );
   if (!rows[0]) throw new AppError(401, "登录已过期，请重新登录");
+  await pool.query(
+    "update auth.local_sessions set last_active_at=now() where token_hash=$1 and last_active_at<now()-interval '1 minute'",
+    [hash(token)],
+  );
   return rows[0];
 }
-export async function setSession(userId: string) {
+export async function setSession(
+  userId: string,
+  meta?: { ip: string | null; userAgent: string },
+) {
   const token = randomBytes(32).toString("hex");
   await pool.query("delete from auth.local_sessions where expires_at<now();");
   await pool.query(
-    "insert into auth.local_sessions(token_hash,user_id,expires_at) values($1,$2,now()+interval '30 days')",
-    [hash(token), userId],
+    "insert into auth.local_sessions(token_hash,user_id,expires_at,ip,user_agent) values($1,$2,now()+interval '30 days',$3,$4)",
+    [
+      hash(token),
+      userId,
+      meta?.ip || null,
+      meta?.userAgent.slice(0, 300) || null,
+    ],
   );
   const jar = await cookies();
   jar.set("island_session", token, {
@@ -154,9 +168,15 @@ export async function storeFile(path: string, bytes: Buffer, type: string) {
 }
 export async function removeFile(path: string) {
   const s = supabase();
-  if (s) await s.storage.from("room-files").remove([path]);
-  else await unlink(resolve(storageRoot(), path)).catch(() => {});
+  if (s) {
+    const { error } = await s.storage.from("room-files").remove([path]);
+    if (error) throw error;
+  } else
+    await unlink(resolve(storageRoot(), path)).catch((e) => {
+      if (e.code !== "ENOENT") throw e;
+    });
   await pool.query("delete from storage.objects where name=$1", [path]);
+  await pool.query("delete from storage_cleanup_jobs where path=$1", [path]);
 }
 export async function loadFile(path: string) {
   const s = supabase();

@@ -30,6 +30,7 @@ export type Room = {
   host_participant_id: string;
   created_at: string;
   updated_at: string;
+  status?: "active" | "frozen" | "deleted";
   unread_count?: number;
   last_message?: string;
   last_message_at?: string | null;
@@ -71,6 +72,7 @@ export type IslandFile = {
   name: string;
   mime_type: string;
   size: number;
+  status?: "normal" | "quarantined" | "deleted";
   storage_path: string;
   created_at: string;
 };
@@ -84,6 +86,7 @@ export type IslandEvent = {
   created_at: string;
 };
 export type RoomState = {
+  capabilities?: Record<string, boolean>;
   room: Room;
   participants: Participant[];
   messages: Message[];
@@ -142,11 +145,14 @@ export const FILE_TYPES: Record<string, string[]> = {
     "pptx",
   ],
 };
-export function validateFile(name: string, mime: string, size: number) {
+export function validateFile(
+  name: string,
+  mime: string,
+  size: number,
+  maxSize = MAX_FILE_SIZE,
+) {
   const ext = name.split(".").pop()?.toLowerCase() || "";
-  return (
-    size > 0 && size <= MAX_FILE_SIZE && (FILE_TYPES[mime] || []).includes(ext)
-  );
+  return size > 0 && size <= maxSize && (FILE_TYPES[mime] || []).includes(ext);
 }
 export function safeFileName(name: string) {
   return (

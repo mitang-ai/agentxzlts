@@ -4,7 +4,7 @@
 
 ## 本地启动
 
-要求 Node.js ≥22、npm、Linux/macOS。仓库已有锁文件。开发 PostgreSQL 二进制由 npm 的 embedded-postgres 包提供，无需 Docker、数据库账号或 Supabase API Key；不能以 root 运行开发数据库，建议普通用户执行。
+要求 Node.js ≥22、npm、Linux/macOS（Windows 推荐使用 WSL）。仓库已有锁文件。开发 PostgreSQL 二进制由 npm 的 embedded-postgres 包提供，无需 Docker、数据库账号或 Supabase API Key；不能以 root 运行开发数据库，建议普通用户执行。
 
 ```bash
 npm ci
@@ -22,6 +22,12 @@ npm run dev
 浏览器打开 http://localhost:3000。可直接注册账号，无需邮箱验证。创建房间、生成邀请，用第二个浏览器/隐身窗口注册另一账号加入，就能实际协作。没有内置假账号或房间。
 
 可选本地配置：复制 `apps/web/.env.example` 为 `.env.local`。数据库开发默认值已内置。`DATABASE_URL` 如用于 `db:migrate` 或测试，还需在执行这些命令的 shell 中设置（Next.js 专属 `.env.local` 不自动加载到独立脚本）。
+
+## 网站管理后台
+
+完整后台位于 `/admin`，与聊天系统使用同一用户、房间、成员、消息、任务、文件与事件。包括真实概览、用户限制、房间冻结/恢复、主持人转移、举报处置、文件隔离、邀请、网站 Logo/名称/SEO、统计工具、公告、灰度开关、系统诊断、Session/IP、管理员与审计。
+
+先在网站注册自己的账号，再运行 `npm run admin:init -- your@email.com` 初始化首位超级管理员；没有默认密码。已有管理员后通过后台授权。详见 [后台设计与适配](docs/admin-design.md)、[运行与部署](docs/admin-deployment.md)、[后台验收](docs/admin-acceptance.md)。
 
 ## 构建与验收
 
