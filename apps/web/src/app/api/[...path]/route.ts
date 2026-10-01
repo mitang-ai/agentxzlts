@@ -26,6 +26,9 @@ import {
   validContent,
 } from "@/lib/server";
 import { subscribe } from "@/lib/realtime";
+import { agents } from "@/lib/agents";
+import { AgentError } from "@island/agents";
+import { nodeClientBundle } from "@island/agents/client-bundle";
 import { scanFile } from "@/lib/scanner";
 import {
   publicSite,
@@ -91,7 +94,10 @@ async function readBody(req: NextRequest, max: number) {
   return Buffer.concat(chunks);
 }
 async function jsonBody(req: NextRequest) {
-  const bytes = await readBody(req, 65536);
+  const bytes = await readBody(
+    req,
+    /\/rooms\/[^/]+\/agents\//.test(req.nextUrl.pathname) ? 1024 * 1024 : 65536,
+  );
   try {
     return JSON.parse(bytes.toString());
   } catch {
@@ -357,6 +363,64 @@ async function handle(
     if (path[0] === "rooms" && path[1]) {
       const roomId = uuid.parse(path[1]);
       await ensureRoom(user, roomId);
+      if (path[2] === "agents") {
+        if (!mutating) {
+          if (path[3] === "client")
+            return new Response(
+              new Uint8Array(await nodeClientBundle(repositoryRoot())),
+              {
+                headers: {
+                  "Content-Type": "application/zip",
+                  "Content-Disposition":
+                    "attachment; filename=island-node-client.zip",
+                  "Cache-Control": "private,no-store",
+                },
+              },
+            );
+          if (path[3] === "merge-preview")
+            return NextResponse.json(
+              await agents.mergePreview(
+                user.id,
+                roomId,
+                uuid.parse(req.nextUrl.searchParams.get("session_id")),
+              ),
+            );
+          return NextResponse.json(await agents.state(user.id, roomId));
+        }
+        const input = await jsonBody(req);
+        const action = path[3];
+        let result;
+        if (action === "pairing")
+          result = await agents.createPairing(user.id, roomId);
+        else if (action === "revoke-pairing")
+          result = await agents.revokePairing(
+            user.id,
+            roomId,
+            input.pairing_id,
+          );
+        else if (
+          ["approve", "reject", "revoke", "mute", "host"].includes(action)
+        )
+          result = await agents.seatAction(user.id, roomId, action, input);
+        else if (action === "brief")
+          result = await agents.publishBrief(user.id, roomId, input);
+        else if (action === "acknowledge")
+          result = await agents.acknowledge(user.id, roomId, input.brief_id);
+        else if (action === "start")
+          result = await agents.startSession(user.id, roomId, input);
+        else if (
+          ["stop", "pause", "resume", "plan", "approve-plan"].includes(action)
+        )
+          result = await agents.sessionAction(user.id, roomId, action, input);
+        else if (action === "review")
+          result = await agents.reviewArtifact(user.id, roomId, input);
+        else if (action === "retry-work")
+          result = await agents.retryWork(user.id, roomId, input.task_id);
+        else if (action === "merge")
+          result = await agents.merge(user.id, roomId, input);
+        else throw new AppError(400, "Agent 操作无效");
+        return NextResponse.json(result);
+      }
       if (path[2] === "events") {
         const after = z.coerce
           .number()
@@ -677,7 +741,7 @@ async function handle(
         },
         { status: 400 },
       );
-    if (e instanceof AppError)
+    if (e instanceof AppError || e instanceof AgentError)
       return NextResponse.json({ error: e.message }, { status: e.status });
     const err = e as { message: string; code: string };
     const code = Object.keys(messages).find((k) => err.message?.includes(k));

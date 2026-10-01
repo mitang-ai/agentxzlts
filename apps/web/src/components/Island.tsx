@@ -10,6 +10,7 @@ import {
 import * as Dialog from "@radix-ui/react-dialog";
 import {
   MessageCircle,
+  Bot,
   House,
   ListTodo,
   Settings,
@@ -42,6 +43,7 @@ import {
 } from "lucide-react";
 import { useSite, SiteBrand, SiteFooter } from "@/components/SiteProvider";
 import { ParticipantAvatar } from "@island/ui";
+import ConnectionPanel from "./ConnectionPanel";
 import {
   canManage,
   canUpdateTask,
@@ -270,8 +272,12 @@ export default function Island() {
   const [rooms, setRooms] = useState<Room[]>([]);
   const [roomId, setRoomId] = useState<string | null>(null);
   const [state, setState] = useState<RoomState | null>(null);
-  const [primary, setPrimary] = useState<"chat" | "rooms" | "tasks">("chat");
-  const [tab, setTab] = useState<"chat" | "tasks" | "files">("chat");
+  const [primary, setPrimary] = useState<
+    "chat" | "rooms" | "tasks" | "connections"
+  >("chat");
+  const [tab, setTab] = useState<"chat" | "tasks" | "files" | "connections">(
+    "chat",
+  );
   const [modal, setModal] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
@@ -555,8 +561,19 @@ export default function Island() {
   useEffect(() => {
     if (tab === "tasks" && !caps.tasks) setTab("chat");
     if (tab === "files" && !caps.uploads) setTab("chat");
+    if (tab === "connections" && (!caps.agents || !caps.connection_seat)) {
+      setTab("chat");
+      setPrimary("chat");
+    }
     if (primary === "tasks" && !caps.tasks) setPrimary("chat");
-  }, [caps.tasks, caps.uploads, tab, primary]);
+  }, [
+    caps.tasks,
+    caps.uploads,
+    caps.agents,
+    caps.connection_seat,
+    tab,
+    primary,
+  ]);
   const me = state?.participants.find(
     (p) => p.user_id === user?.id && p.status === "active",
   );
@@ -725,14 +742,21 @@ export default function Island() {
             { key: "chat", label: "聊天", icon: <MessageCircle size={21} /> },
             { key: "rooms", label: "房间", icon: <House size={21} /> },
             { key: "tasks", label: "任务", icon: <ListTodo size={21} /> },
+            { key: "connections", label: "联机", icon: <Bot size={21} /> },
           ]
-            .filter((n) => n.key !== "tasks" || caps.tasks)
+            .filter(
+              (n) =>
+                (n.key !== "tasks" || caps.tasks) &&
+                (n.key !== "connections" ||
+                  (caps.agents && caps.connection_seat)),
+            )
             .map((n) => (
               <button
                 key={n.key}
                 className={primary === n.key ? "selected" : ""}
                 onClick={() => {
                   setPrimary(n.key as typeof primary);
+                  if (n.key === "connections") setTab("connections");
                   if (n.key === "rooms") setRoomId(null);
                 }}
                 aria-label={n.label}
@@ -974,11 +998,16 @@ export default function Island() {
                   { key: "chat", label: "聊天" },
                   { key: "files", label: "文件" },
                   { key: "tasks", label: "任务" },
+                  { key: "connections", label: "联机席位" },
                 ]
                   .filter(
                     (t) =>
                       t.key === "chat" ||
-                      (t.key === "tasks" ? caps.tasks : caps.uploads),
+                      (t.key === "tasks"
+                        ? caps.tasks
+                        : t.key === "connections"
+                          ? caps.agents && caps.connection_seat
+                          : caps.uploads),
                   )
                   .map((t) => (
                     <button
@@ -995,10 +1024,21 @@ export default function Island() {
                   ? "沟通，让协作自然发生"
                   : tab === "tasks"
                     ? "谁负责哪一块，一目了然"
-                    : "共同分享，随时找到"}
+                    : tab === "connections"
+                      ? "连接远端设备，主持讨论与开发"
+                      : "共同分享，随时找到"}
               </span>
             </div>
-            {tab === "chat" ? (
+            {tab === "connections" ? (
+              <ConnectionPanel
+                key={roomId}
+                state={state}
+                notify={notify}
+                onChanged={async () => {
+                  await load(roomId);
+                }}
+              />
+            ) : tab === "chat" ? (
               <>
                 <div className="messages" role="log" aria-label="聊天消息">
                   <div className="message-inner">
@@ -1056,6 +1096,14 @@ export default function Island() {
                           <div className="message-main">
                             <div className="message-meta">
                               <strong>{p?.display_name || "成员"}</strong>
+                              {p?.type === "agent" && (
+                                <span className="host-badge">
+                                  <Bot size={11} />
+                                  {p.id === state.room.agent_host_participant_id
+                                    ? "Agent 主持人"
+                                    : "Agent"}
+                                </span>
+                              )}
                               {p?.id === state.room.host_participant_id && (
                                 <span className="host-badge">
                                   <Crown size={11} />
@@ -1699,6 +1747,15 @@ export default function Island() {
                 <div>
                   <strong>
                     {p.display_name}
+                    {p.type === "agent" && (
+                      <small>
+                        {" "}
+                        Agent
+                        {p.id === state.room.agent_host_participant_id
+                          ? " 主持人"
+                          : ""}
+                      </small>
+                    )}
                     {p.id === me?.id && <small>（你）</small>}
                   </strong>
                   <small>
@@ -1727,22 +1784,24 @@ export default function Island() {
                 )}
                 {host && p.id !== me?.id && (
                   <div className="member-actions">
-                    <button
-                      onClick={() =>
-                        ask(
-                          "转移主持人",
-                          `确定将主持人转移给 ${p.display_name}？转移后，你将成为普通成员。`,
-                          async () => {
-                            await run("transfer_host", {
-                              participant_id: p.id,
-                            });
-                            notify("主持人已转移");
-                          },
-                        )
-                      }
-                    >
-                      转移主持人
-                    </button>
+                    {p.type === "human" && (
+                      <button
+                        onClick={() =>
+                          ask(
+                            "转移主持人",
+                            `确定将主持人转移给 ${p.display_name}？转移后，你将成为普通成员。`,
+                            async () => {
+                              await run("transfer_host", {
+                                participant_id: p.id,
+                              });
+                              notify("主持人已转移");
+                            },
+                          )
+                        }
+                      >
+                        转移主持人
+                      </button>
+                    )}
                     <button
                       className="danger-text"
                       onClick={() =>

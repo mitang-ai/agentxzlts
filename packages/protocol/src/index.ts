@@ -28,6 +28,7 @@ export type Room = {
   name: string;
   icon: string;
   host_participant_id: string;
+  agent_host_participant_id?: string | null;
   created_at: string;
   updated_at: string;
   status?: "active" | "frozen" | "deleted";
@@ -95,19 +96,57 @@ export type RoomState = {
   cursor: number;
   has_more: boolean;
 };
-// 未来 Gateway 和 Adapter 的契约独立于聊天室 Core，当前不启用远端 Agent。
+// Gateway 与本机 Adapter 使用独立边界，参与者仍复用同一房间业务模型。
+export type AgentTurn = {
+  id: string;
+  kind: "mention" | "host" | "speak" | "align" | "develop";
+  participant_id: string;
+  room_id: string;
+  input: Record<string, unknown>;
+  brief: {
+    content_hash: string;
+    requirements: string;
+    design: string;
+    base_file_id: string | null;
+    base_hash: string | null;
+    file_ids: string[];
+  } | null;
+  session: Record<string, unknown> | null;
+  participants: Pick<Participant, "id" | "type" | "display_name">[];
+  messages: Pick<
+    Message,
+    "sender_participant_id" | "content" | "type" | "created_at"
+  >[];
+  hard_deadline: string;
+};
+export type AgentTurnResult = {
+  message: string;
+  acknowledge: boolean;
+  speakers: { participant_id: string; instruction: string }[];
+  done: boolean;
+  plan: {
+    title: string;
+    description: string;
+    assignee_id: string;
+    paths: string[];
+  }[];
+  summary: string;
+  local_session_id?: string;
+};
 export interface AgentAdapter {
-  kind: "acp" | "a2a" | "cli" | "http";
+  kind?: "acp" | "a2a" | "cli" | "http";
   discover(): Promise<{ id: string; name: string }[]>;
-  resume(sessionId: string): Promise<void>;
-  dispatch(event: IslandEvent): Promise<void>;
+  resume(sessionId: string | null): Promise<void>;
+  dispatch(
+    turn: AgentTurn,
+    context: { cwd: string; signal?: AbortSignal; documentPaths?: string[] },
+  ): Promise<AgentTurnResult>;
   disconnect(): Promise<void>;
 }
 export type NodePairing = {
-  protocol_version: typeof PROTOCOL_VERSION;
+  id: string;
   code: string;
   expires_at: string;
-  node_id: string;
 };
 export function canManage(room: Room, participant: Participant) {
   return (

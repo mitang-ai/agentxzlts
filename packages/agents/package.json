@@ -1,0 +1,27 @@
+{
+  "name": "@island/agents",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./service.mjs"
+    },
+    "./gateway": "./gateway.mjs",
+    "./archive": "./archive.mjs",
+    "./protocol": "./protocol.mjs",
+    "./client-bundle": {
+      "types": "./client-bundle.d.ts",
+      "default": "./client-bundle.mjs"
+    }
+  },
+  "dependencies": {
+    "pg": "^8.23.1",
+    "zod": "^4.3.6",
+    "ws": "^8.18.3",
+    "yauzl": "^3.2.0",
+    "yazl": "^3.3.1",
+    "@island/runtime": "*"
+  }
+}

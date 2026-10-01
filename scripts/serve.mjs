@@ -103,14 +103,7 @@ export async function startRuntime() {
     await atomicJSON(paths().runtime, state);
     web = spawn(
       process.execPath,
-      [
-        resolve(config.root, "node_modules/next/dist/bin/next"),
-        "start",
-        "--hostname",
-        env.ISLAND_BIND_HOST,
-        "--port",
-        env.PORT,
-      ],
+      [resolve(config.root, "scripts/web-server.mjs")],
       {
         cwd: resolve(config.root, "apps/web"),
         env: { ...process.env, ...env, ISLAND_ROOT: config.root },

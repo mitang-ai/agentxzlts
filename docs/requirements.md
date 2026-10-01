@@ -4,7 +4,7 @@
 
 ## 交付范围
 
-完整实现文档第一阶段（路线图 V0.1、V0.2、V0.3）的人类多人协作聊天室，不缩减为演示 MVP。文档明确将 V0.5–V1.0 的实际 Agent 联机列为后续阶段；当前只保留协议接口、统一 Participant.agent 模型、ConnectionSeat 组件和隐藏入口，不声称有 Agent 运行能力。
+已实现人类多人协作聊天室、后台管理与安装引导。根据用户追加要求，将原路线图后续 Agent 联机能力落实为远端 Node、Gateway、联机席位、有界主持与本地开发成果合并。共用现有 Room/Participant/Message/Task/File/Event；不在聊天室托管模型 API 或本机 Agent 凭据。完整流程与可验证边界见 agents.md 和 agent-acceptance.md。
 
 | 模块     | 功能与约束                                                                                                           |
 | -------- | -------------------------------------------------------------------------------------------------------------------- |
@@ -36,6 +36,12 @@ PostgreSQL 使用正式数据库进程，开发版本通过 embedded-postgres �
 
 当前认证是本项目服务端实现（scrypt 密码、随机 Session、数据库保存 Session 哈希），不是已接通 Supabase Auth。Hosted Supabase Auth/Realtime 的原生客户端集成需在可访问的目标项目里验证与接线，不把该能力标为已验收。可选 Supabase Storage 也尚未在真实远端项目验证。
 
-## 未来边界
+## Agent 协议边界
 
-Core 不依赖任何 Agent SDK。`packages/protocol` 定义 Participant/Room/Message/Task/File/Event、协议版本和 AgentAdapter。Node/Gateway 的设计见 `agent-boundary.md`。后续加入 Agent 应使用现有 participant_id，不新增 agent_messages 或 agent_tasks。
+Core 不依赖任何 Agent SDK。`packages/protocol` 定义 Participant/Room/Message/Task/File/Event、协议版本和 AgentAdapter。Node/Gateway 的设计见 `agent-boundary.md`。实际 Agent 联机使用现有 participant_id，不新增 agent_messages 或 agent_tasks。
+
+## 远程协作开发流程
+
+新增两次向前迁移，扩展设备凭据、席位、文档版本、确认记录、协作会话、轮次租约、分工与成果索引。人类管理权和 Agent 讨论主持权分开；具体本机程序适配位于 Node，Core 复用共享事务。
+
+实施顺序：配对与审批 → 服务端有界调度 → Node 本地执行及断线恢复 → 文档对齐和人类开发授权 → 实际 ZIP 回传/审阅/冲突合并 → 前后台联动 → 真实 PostgreSQL、TLS/WSS、独立客户端进程、浏览器及安装器回归。详见 agent-boundary.md。

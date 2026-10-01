@@ -1,3 +1,5 @@
+import { agents } from "@/lib/agents";
+import { AgentError } from "@island/agents";
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -34,7 +36,6 @@ const errors: Record<string, string> = {
   CONFIRM_REQUIRED: "请确认此操作及目标对象",
   LAST_SUPER_ADMIN: "必须保留至少一名超级管理员",
   INVALID_TARGET: "目标不存在或状态无效",
-  AGENT_NOT_AVAILABLE: "Agent 与联机席位尚未上线",
   TRANSFER_BEFORE_LEAVING: "请先转移主持人再移出该成员",
   INVALID_ASSIGNEE: "负责人必须为当前房间成员",
 };
@@ -106,6 +107,20 @@ async function handle(
         origin !== (process.env.APP_ORIGIN || "http://localhost:3000")
       )
         throw new AppError(403, "请求来源无效");
+    }
+    if (path[0] === "agents" && path[1] === "revoke" && req.method === "POST") {
+      const input = z
+        .object({
+          node_id: z.uuid(),
+          reason: z.string().trim().min(3).max(2000),
+          confirm: z.literal(true),
+        })
+        .parse(await body(req));
+      return response(
+        NextResponse.json(
+          await agents.adminRevoke(user.id, input.node_id, input.reason),
+        ),
+      );
     }
     if (path[0] === "brand" && req.method === "POST") {
       if (user.role !== "super")
@@ -360,7 +375,7 @@ async function handle(
       (e as Error).message?.includes(k),
     );
     const status =
-      e instanceof AppError
+      e instanceof AppError || e instanceof AgentError
         ? e.status
         : e instanceof z.ZodError
           ? 400
@@ -391,7 +406,7 @@ async function handle(
       NextResponse.json(
         {
           error:
-            e instanceof AppError
+            e instanceof AppError || e instanceof AgentError
               ? e.message
               : code
                 ? errors[code]

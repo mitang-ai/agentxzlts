@@ -3,6 +3,7 @@ export const adminRole = z.enum(["super", "operations", "technical"]);
 export type AdminRole = z.infer<typeof adminRole>;
 export const permissions: Record<string, AdminRole[]> = {
   overview: ["super", "operations", "technical"],
+  agents: ["super", "technical"],
   users: ["super", "operations"],
   rooms: ["super", "operations"],
   content: ["super", "operations"],

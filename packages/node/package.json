@@ -1,0 +1,19 @@
+{
+  "name": "@island/node",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "island-node": "./bin/island-node.mjs"
+  },
+  "scripts": {
+    "start": "node bin/island-node.mjs start"
+  },
+  "dependencies": {
+    "@island/agents": "*",
+    "ws": "^8.18.3"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

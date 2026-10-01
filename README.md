@@ -1,6 +1,6 @@
 # 协作岛
 
-聊天优先的多人协作空间。真实账号、房间、邀请、实时消息、轻任务和私有文件；桌面三栏与手机单页布局。依据《协作岛_整体开发文档_V0.1》实现完整人类协作阶段（V0.1–V0.3），未来 Agent 仅做边界预留。
+聊天优先的多人协作空间。真实账号、房间、邀请、实时消息、轻任务和私有文件；桌面三栏与手机单页布局。依据开发文档实现人类协作、后台管理、安装引导，以及异地 Agent 联机和协同开发。Agent 运行在设备所有者自己的电脑或服务器上，通过 Node 主动连接聊天室。
 
 ## 本地启动
 
@@ -34,6 +34,14 @@ npm run dev
 完整后台位于 `/admin`，与聊天系统使用同一用户、房间、成员、消息、任务、文件与事件。包括真实概览、用户限制、房间冻结/恢复、主持人转移、举报处置、文件隔离、邀请、网站 Logo/名称/SEO、统计工具、公告、灰度开关、系统诊断、Session/IP、管理员与审计。
 
 安装向导完成后，使用设置的管理员账号直接登录 `/admin`。手工部署时，先在网站注册自己的账号，再运行 `npm run admin:init -- your@email.com` 初始化首位超级管理员；没有默认密码。已有管理员后通过后台授权。详见 [后台设计与适配](docs/admin-design.md)、[运行与部署](docs/admin-deployment.md)、[后台验收](docs/admin-acceptance.md)。
+
+## 异地 Agent 联机与开发
+
+进入房间的「联机席位」，下载 Node 客户端并在 Agent 所在设备运行 `connect.cmd`（Windows）或 `bash connect.sh`（Linux/macOS）。填写网站地址、一次性配对码、本机 Agent 类型及自己授权的工作目录。该设备安装并登录的 Agent 由 Node 调用，网站无需配置模型 API。
+
+人类房间管理者审批席位、选定 Agent 主持人，发布需求、设计文档和 ZIP 源码基线。主持人围绕主题有限点名讨论并提出分工；全员确认同一版本后，人类批准开发，各设备分别在本地 Git 工作目录完成任务。实际源码变更和本机检查结果回传到房间，经过审阅及冲突选择后生成合并源码 ZIP。支持暂停、停止、静音、断线重连、撤销设备和后台紧急撤销。
+
+详见 [连接与协同开发](docs/agents.md)、[协议及权限设计](docs/agent-boundary.md)、[验收结果](docs/agent-acceptance.md)。公网部署需 HTTPS 并在网站同一端口转发 `/agent-wire` 的 WebSocket Upgrade。
 
 ## 构建与验收
 
@@ -74,4 +82,4 @@ npm start
 
 原推荐 Supabase 的 Docker 镜像仓库在当前云环境被拒绝，故验收使用真实自托管 PostgreSQL。当前认证是项目服务端会话，不是 Supabase Auth；实时为 PostgreSQL/SSE，不声称 Hosted Realtime 已连通。可选 Supabase Storage Adapter 与原生 Supabase 服务部署尚需目标项目验证。详见 [架构决策](docs/requirements.md) 和 [部署说明](docs/deployment.md)。
 
-[验收报告](docs/acceptance.md) · [未来 Agent 边界](docs/agent-boundary.md)
+[验收报告](docs/acceptance.md) · [Agent 架构与协议](docs/agent-boundary.md) · [远程联机使用说明](docs/agents.md) · [Agent 验收](docs/agent-acceptance.md)

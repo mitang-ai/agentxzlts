@@ -11,6 +11,13 @@
     "./password": {
       "types": "./password.d.ts",
       "default": "./password.mjs"
+    },
+    "./storage": {
+      "types": "./storage.d.ts",
+      "default": "./storage.mjs"
     }
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.99.0"
   }
 }

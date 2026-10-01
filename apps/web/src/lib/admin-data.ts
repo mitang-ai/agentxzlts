@@ -109,6 +109,12 @@ export async function adminList(module: string, f: Filters) {
   const args = [`%${f.q}%`, f.status, f.from, f.to];
   const time = (col: string) =>
     `($3::timestamptz is null or ${col}>=$3) and ($4::timestamptz is null or ${col}<=$4)`;
+  if (module === "agents")
+    return list(
+      `select p.id,p.display_name,p.room_id,r.name room_name,s.state,s.muted,n.id node_id,n.name node_name,n.adapter,n.last_seen_at,n.expires_at,n.revoked_at,owner.display_name owner_name,(select count(*)::int from agent_turns j where j.participant_id=p.id and j.status='leased') active_turns from agent_seats s join participants p on p.id=s.participant_id join agent_nodes n on n.id=s.node_id join rooms r on r.id=p.room_id join profiles owner on owner.id=n.owner_user_id where (p.display_name ilike $1 or n.name ilike $1 or r.name ilike $1) and ($2='' or s.state=$2) and ${time("n.created_at")} order by n.created_at desc`,
+      f,
+      args,
+    );
   if (module === "users")
     return list(
       `select p.*,effective_status(p.id) effective_status,(select count(*)::int from participants where user_id=p.id and status='active') joined_rooms,(select count(*)::int from rooms where created_by=p.id and status<>'deleted') created_rooms,(select count(*)::int from messages m join participants a on a.id=m.sender_participant_id where a.user_id=p.id) message_count,(select coalesce(sum(size),0) from files f join participants a on a.id=f.uploader_participant_id where a.user_id=p.id and f.status<>'deleted') storage_bytes,am.role admin_role from profiles p left join admin_members am on am.user_id=p.id where (p.email ilike $1 or p.display_name ilike $1 or p.id::text ilike $1) and ($2='' or effective_status(p.id)=$2) and ${time("p.created_at")} order by p.created_at desc`,

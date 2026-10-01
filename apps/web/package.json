@@ -20,7 +20,8 @@
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "zod": "^4.3.6",
-    "@island/runtime": "*"
+    "@island/runtime": "*",
+    "@island/agents": "*"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.2.0",

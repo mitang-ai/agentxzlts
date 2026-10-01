@@ -2,9 +2,7 @@ import "server-only";
 import { Pool, type PoolClient } from "pg";
 import { cookies } from "next/headers";
 import { createHash, randomBytes } from "node:crypto";
-import { resolve } from "node:path";
-import { mkdir, writeFile, readFile, unlink } from "node:fs/promises";
-import { createClient } from "@supabase/supabase-js";
+import { createStorage } from "@island/runtime/storage";
 import { applyRuntimeConfig } from "@island/runtime";
 import { passwordHash, verifyPassword } from "@island/runtime/password";
 export { passwordHash, verifyPassword };
@@ -124,57 +122,8 @@ export async function ensureRoom(user: Identity, id: string) {
   );
   if (!member) throw new AppError(403, "你没有访问这个房间的权限");
 }
-const supabase = () =>
-  process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY
-    ? createClient(
-        process.env.SUPABASE_URL,
-        process.env.SUPABASE_SERVICE_ROLE_KEY,
-        { auth: { persistSession: false } },
-      )
-    : null;
-const storageRoot = () =>
-  resolve(
-    /* turbopackIgnore: true */ process.env.STORAGE_DIR || "../../.data/files",
-  );
-export async function storeFile(path: string, bytes: Buffer, type: string) {
-  const s = supabase();
-  if (s) {
-    const { error } = await s.storage
-      .from("room-files")
-      .upload(path, bytes, { contentType: type });
-    if (error) throw error;
-  } else {
-    const full = resolve(storageRoot(), path);
-    await mkdir(resolve(full, ".."), { recursive: true });
-    await writeFile(full, bytes, { flag: "wx" });
-  }
-  if (!s)
-    await pool.query(
-      "insert into storage.objects(bucket_id,name,metadata) values('room-files',$1,$2) on conflict(name) do nothing",
-      [path, JSON.stringify({ mimetype: type, size: bytes.length })],
-    );
-}
-export async function removeFile(path: string) {
-  const s = supabase();
-  if (s) {
-    const { error } = await s.storage.from("room-files").remove([path]);
-    if (error) throw error;
-  } else
-    await unlink(resolve(storageRoot(), path)).catch((e) => {
-      if (e.code !== "ENOENT") throw e;
-    });
-  await pool.query("delete from storage.objects where name=$1", [path]);
-  await pool.query("delete from storage_cleanup_jobs where path=$1", [path]);
-}
-export async function loadFile(path: string) {
-  const s = supabase();
-  if (s) {
-    const { data, error } = await s.storage.from("room-files").download(path);
-    if (error) throw error;
-    return Buffer.from(await data.arrayBuffer());
-  }
-  return readFile(/* turbopackIgnore: true */ resolve(storageRoot(), path));
-}
+export const fileStorage = createStorage(pool);
+export const { storeFile, loadFile, removeFile } = fileStorage;
 // 检查魔数，避免用扩展名或浏览器声明的 MIME 伪装可执行内容。
 export function validContent(bytes: Buffer, mime: string) {
   if (mime === "image/png")

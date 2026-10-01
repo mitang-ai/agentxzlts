@@ -7,13 +7,8 @@ if (!["dev", "start"].includes(command)) throw Error("网站启动方式无效�
 const child = spawn(
   process.execPath,
   [
-    resolve(config.root, "node_modules/next/dist/bin/next"),
-    command,
-    "--hostname",
-    config.env.ISLAND_BIND_HOST,
-    "--port",
-    config.env.PORT,
-    ...process.argv.slice(3),
+    resolve(config.root, "scripts/web-server.mjs"),
+    ...(command === "dev" ? ["--dev"] : []),
   ],
   {
     cwd: resolve(config.root, "apps/web"),

@@ -1,0 +1,19 @@
+-- 房间解散沿完整引用图清理协作状态；多层级引用必须具有一致的级联语义。
+alter table collaboration_work drop constraint collaboration_work_assignee_id_fkey;
+alter table collaboration_work add constraint collaboration_work_assignee_id_fkey foreign key(assignee_id) references participants on delete cascade;
+alter table collaboration_briefs drop constraint collaboration_briefs_published_by_fkey;
+alter table collaboration_briefs add constraint collaboration_briefs_published_by_fkey foreign key(published_by) references participants on delete cascade;
+alter table collaboration_briefs drop constraint collaboration_briefs_base_file_id_fkey;
+alter table collaboration_briefs add constraint collaboration_briefs_base_file_id_fkey foreign key(base_file_id) references files on delete set null;
+alter table collaboration_sessions drop constraint collaboration_sessions_brief_id_fkey;
+alter table collaboration_sessions add constraint collaboration_sessions_brief_id_fkey foreign key(brief_id) references collaboration_briefs on delete cascade;
+alter table collaboration_sessions drop constraint collaboration_sessions_host_participant_id_fkey;
+alter table collaboration_sessions add constraint collaboration_sessions_host_participant_id_fkey foreign key(host_participant_id) references participants on delete cascade;
+alter table collaboration_sessions drop constraint collaboration_sessions_plan_approved_by_fkey;
+alter table collaboration_sessions add constraint collaboration_sessions_plan_approved_by_fkey foreign key(plan_approved_by) references participants on delete set null;
+alter table agent_turns drop constraint agent_turns_participant_id_fkey;
+alter table agent_turns add constraint agent_turns_participant_id_fkey foreign key(participant_id) references participants on delete cascade;
+alter table collaboration_artifacts drop constraint collaboration_artifacts_file_id_fkey;
+alter table collaboration_artifacts add constraint collaboration_artifacts_file_id_fkey foreign key(file_id) references files on delete cascade;
+alter table collaboration_artifacts drop constraint collaboration_artifacts_reviewed_by_fkey;
+alter table collaboration_artifacts add constraint collaboration_artifacts_reviewed_by_fkey foreign key(reviewed_by) references participants on delete set null;

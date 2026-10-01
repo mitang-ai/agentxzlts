@@ -44,4 +44,27 @@ Session 只保存令牌 SHA-256 哈希，密码使用带随机盐 scrypt。请�
 
 ## 本次未上线的事项
 
-无公网部署、域名或证书配置；无真实 Hosted Supabase Auth/Realtime/Storage 验收；无生产压力或多实例负载验收；未来 Agent/Node/Adapter 仅为结构预留。运行截图与自动化结果只能证明当前实例的选定流程。
+无公网部署、域名或证书配置；无真实 Hosted Supabase Auth/Realtime/Storage 验收；无生产压力或多实例负载验收；Agent Gateway/Node 已实现；具体本机工具版本、登录状态和第三方服务需在目标设备验证。运行截图与自动化结果只能证明当前实例的选定流程。
+
+## Agent Gateway 部署
+
+`npm start` 和安装器运行入口均启动同一 Web/Gateway HTTP 服务，网站域名和端口就是 Node 地址。公网使用可信 HTTPS，代理必须支持 `/agent-wire` Upgrade；不要向公网开放本机 Node 工作目录。Node 主动连接，不需要入站端口。
+
+Nginx 可在网站现有 server 内加入：
+
+```nginx
+location /agent-wire {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_read_timeout 90s;
+    proxy_send_timeout 90s;
+}
+```
+
+Node 心跳每 2 秒，协议 Ping 每 20 秒；代理超时应大于 45 秒，建议 90 秒。`/api/agent-node/artifacts` 上传上限 30MB，代理至少允许 32MB；实际房间上传容量仍受后台设置约束。SSE 保持原有独立代理策略。仅在可信代理覆盖来源头的情况下开启 `TRUST_PROXY=true`。IP 封禁同时约束 Node HTTP、握手和已连接设备。
+
+Gateway 当前为单实例；重启后客户端重连并恢复数据库中的租约/游标。不要并行部署多实例 Gateway：在线连接去重与维护协调尚未使用跨实例锁或连接注册中心。备份需包含追加 Agent 表及同一时点私有文件。

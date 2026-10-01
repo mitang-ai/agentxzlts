@@ -316,16 +316,24 @@ describe.sequential("后台同源权限、事务与前台联动", () => {
       rollout: 100,
     });
   });
-  it("未来 Agent 与联机席位不能被开关冒充为已上线", async () => {
-    await expect(
-      admin(tech, "feature_flag", {
+  it("已实现的 Agent 与联机席位可以由技术管理员停用和重新启用", async () => {
+    for (const enabled of [false, true]) {
+      await admin(tech, "feature_flag", {
         key: "agents",
-        enabled: true,
+        enabled,
         scope: "all",
         targets: [],
         rollout: 100,
-      }),
-    ).rejects.toThrow("AGENT_NOT_AVAILABLE");
+      });
+      expect(
+        (
+          await pool.query("select flag_enabled('agents',$1,$2) enabled", [
+            other,
+            room,
+          ])
+        ).rows[0].enabled,
+      ).toBe(enabled);
+    }
   });
   it("用户举报验证房间资格；处置事务同时软删除消息、保留回复关联并记录审计", async () => {
     report = (

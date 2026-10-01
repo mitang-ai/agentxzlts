@@ -1,0 +1,140 @@
+{
+  "date": "2026-10-01",
+  "target": "Next.js production custom Web/Gateway + PostgreSQL + private filesystem + independent Node processes",
+  "unit_and_integration": {
+    "passed": 81,
+    "failed": 0,
+    "skipped": 0,
+    "files": [
+      {
+        "file": "tests/adapters.test.ts",
+        "passed": 6
+      },
+      {
+        "file": "tests/admin.test.ts",
+        "passed": 16
+      },
+      {
+        "file": "tests/agents.test.ts",
+        "passed": 14
+      },
+      {
+        "file": "tests/database.test.ts",
+        "passed": 13
+      },
+      {
+        "file": "tests/installation.test.ts",
+        "passed": 21
+      },
+      {
+        "file": "tests/node-integration.test.ts",
+        "passed": 7
+      },
+      {
+        "file": "tests/protocol.test.ts",
+        "passed": 4
+      }
+    ]
+  },
+  "browser": {
+    "stats": {
+      "startTime": "2026-10-01T17:44:56.200Z",
+      "duration": 149678.594,
+      "expected": 12,
+      "skipped": 0,
+      "unexpected": 0,
+      "flaky": 0
+    },
+    "results": [
+      {
+        "title": "双前台实时联动：冻结、主持人、文件、邀请、任务开关、举报、封禁与审计",
+        "status": "passed",
+        "duration_ms": 7712
+      },
+      {
+        "title": "品牌、SEO、上传策略、公告、注册与维护设置真实生效",
+        "status": "passed",
+        "duration_ms": 14128
+      },
+      {
+        "title": "管理员角色、敏感访问、IP、CSV 与手机应急页面",
+        "status": "passed",
+        "duration_ms": 1690
+      },
+      {
+        "title": "系统 Event 游标、运营 CSV 与安全清理维护工具",
+        "status": "passed",
+        "duration_ms": 224
+      },
+      {
+        "title": "人类在联机席位审批两个真实 Node、选主持、确认文档、批准本地开发并审阅合并；手机可用",
+        "status": "passed",
+        "duration_ms": 20698
+      },
+      {
+        "title": "完整双账号协作：邀请、实时、重连、回复、任务、文件、主持人和退出",
+        "status": "passed",
+        "duration_ms": 9177
+      },
+      {
+        "title": "移动端单页流程：注册、房间、聊天、任务、文件、返回和登录",
+        "status": "passed",
+        "duration_ms": 2693
+      },
+      {
+        "title": "历史分页、持久化引用、未读与鉴权图片预览",
+        "status": "passed",
+        "duration_ms": 5592
+      },
+      {
+        "title": "全新内置 PostgreSQL 自动配置、安装窗口关闭后运行及启动文件恢复",
+        "status": "passed",
+        "duration_ms": 36153
+      },
+      {
+        "title": "环境检测、连接验证、管理员与网站配置，安装后前后台共用新地址",
+        "status": "passed",
+        "duration_ms": 33265
+      },
+      {
+        "title": "保留数据升级、安装锁、停止与重新启动使用保存配置",
+        "status": "passed",
+        "duration_ms": 15222
+      },
+      {
+        "title": "手机环境检测与数据库配置页面不溢出",
+        "status": "passed",
+        "duration_ms": 664
+      }
+    ]
+  },
+  "typecheck": "passed",
+  "production_build": "passed",
+  "production_dependency_audit": {
+    "info": 0,
+    "low": 0,
+    "moderate": 0,
+    "high": 0,
+    "critical": 0,
+    "total": 0
+  },
+  "independent_downloaded_client_install": "passed",
+  "tls_verification": "enabled, test CA trusted with NODE_EXTRA_CA_CERTS",
+  "agent_behavior": "deterministic local protocol fixtures, actual network/files/Git/processes",
+  "native_agent_model_execution": "not executed; target-device login/version validation required",
+  "platform": "Linux x64 / Node.js 24.19.0 / Next.js 16.3.8 / PostgreSQL / Chromium",
+  "limitations": [
+    "single Gateway instance",
+    "no physical geographically separated devices or native Windows/macOS run",
+    "no public deployment or remote Supabase Storage validation",
+    "file-level conflict selection; no automatic text merge"
+  ],
+  "gateway_database_transient_recovery": "passed with injected failure and actual continued HTTPS/WSS operations",
+  "latest_agent_browser_recheck": {
+    "passed": 1,
+    "failed": 0,
+    "skipped": 0,
+    "start_time": "2026-10-01T17:52:46.105Z",
+    "duration_ms": 22193.306999999997
+  }
+}

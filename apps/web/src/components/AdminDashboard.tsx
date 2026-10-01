@@ -27,6 +27,7 @@ import {
   MessageCircle,
   ListTodo,
   Globe,
+  Bot,
 } from "lucide-react";
 import { api, ApiError, size } from "@/lib/client";
 import { permissions, type AdminRole } from "@/lib/admin-policy";
@@ -49,6 +50,7 @@ const nav = [
   { section: "invites", name: "邀请", icon: Link, group: "运营" },
   { section: "operations", name: "运营设置", icon: Settings, group: "运营" },
   { section: "system", name: "系统状态", icon: Activity, group: "系统" },
+  { section: "agents", name: "Agent 联机", icon: Bot, group: "系统" },
   { section: "security", name: "安全与管理员", icon: Shield, group: "安全" },
   { section: "audit", name: "操作日志", icon: ClipboardList, group: "安全" },
 ];
@@ -65,6 +67,7 @@ const hints: Record<string, string> = {
   invites: "管理邀请使用次数和有效期，不暴露可使用的邀请令牌。",
   operations: "配置网站品牌、信息、统计工具、公告和功能开关。",
   system: "观察真实数据库、实时事件、错误与存储状态。",
+  agents: "查看远端设备、联机席位与任务授权，紧急撤销会即时停止该设备。",
   security: "管理登录会话、IP 限制及管理员角色。",
   audit: "查询管理操作、前后状态、处理原因与追踪标识。",
 };
@@ -440,6 +443,77 @@ export default function AdminDashboard({
     </button>
   );
   const columns = (): Column[] => {
+    if (section === "agents")
+      return [
+        {
+          title: "Agent / 设备",
+          render: (r) => (
+            <div>
+              <strong>{r.display_name}</strong>
+              <small>
+                {r.node_name} · {r.adapter}
+              </small>
+            </div>
+          ),
+        },
+        {
+          title: "房间 / 所属成员",
+          render: (r) => (
+            <div>
+              {r.room_name}
+              <small>{r.owner_name}</small>
+            </div>
+          ),
+        },
+        {
+          title: "席位",
+          render: (r) =>
+            r.state === "approved"
+              ? r.muted
+                ? "已静音"
+                : "已批准"
+              : r.state === "pending"
+                ? "待批准"
+                : "已撤销",
+        },
+        {
+          title: "设备连接",
+          render: (r) =>
+            r.last_seen_at &&
+            Date.now() - new Date(r.last_seen_at).getTime() < 45000
+              ? "在线"
+              : "离线",
+        },
+        { title: "运行任务", render: (r) => r.active_turns },
+        {
+          title: "操作",
+          render: (r) =>
+            !r.revoked_at && (
+              <button
+                className="ad-text-button danger"
+                onClick={async () => {
+                  const reason = window.prompt(
+                    "填写撤销此设备的具体原因（至少 3 个字）",
+                  );
+                  if (!reason || reason.trim().length < 3) return;
+                  if (!window.confirm("确认撤销设备并停止在途任务？")) return;
+                  try {
+                    await api("admin/agents/revoke", {
+                      node_id: r.node_id,
+                      reason,
+                      confirm: true,
+                    });
+                    await refresh();
+                  } catch (e) {
+                    setError((e as Error).message);
+                  }
+                }}
+              >
+                撤销设备
+              </button>
+            ),
+        },
+      ];
     if (section === "users")
       return [
         {
@@ -980,6 +1054,7 @@ export default function AdminDashboard({
                   </>
                 )}
                 {[
+                  "agents",
                   "users",
                   "rooms",
                   "files",
@@ -1772,17 +1847,14 @@ function Operations({
                 { title: "指定对象", render: (r) => r.targets.length },
                 {
                   title: "操作",
-                  render: (r) =>
-                    ["agents", "connection_seat"].includes(r.key) ? (
-                      <span className="ad-help">实际能力尚未上线</span>
-                    ) : (
-                      <button
-                        className="ad-text-button"
-                        onClick={() => act("feature_flag", r, labels[r.key])}
-                      >
-                        配置
-                      </button>
-                    ),
+                  render: (r) => (
+                    <button
+                      className="ad-text-button"
+                      onClick={() => act("feature_flag", r, labels[r.key])}
+                    >
+                      配置
+                    </button>
+                  ),
                 },
               ]}
             />

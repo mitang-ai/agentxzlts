@@ -625,8 +625,15 @@ test.describe.serial("完整后台与现有聊天系统适配", () => {
       ),
     ).toBe(true);
     const agent = await a.request.get("/api/admin/agents");
-    expect(agent.status()).toBe(403);
-    await expect(pa.getByRole("link", { name: /Agent/ })).toBeHidden();
+    expect(agent.status()).toBe(200);
+    await pa.getByRole("button", { name: "展开导航" }).click();
+    await expect(pa.getByRole("link", { name: /Agent/ })).toBeVisible();
+    await pa.getByRole("link", { name: "Agent 联机", exact: true }).click();
+    await expect(
+      pa.getByRole("heading", { name: "Agent 联机", exact: true }),
+    ).toBeVisible();
+    expect((await c.request.get("/api/admin/agents")).status()).toBe(200);
+    expect((await b.request.get("/api/admin/agents")).status()).toBe(403);
     await a.close();
     await b.close();
     await c.close();
