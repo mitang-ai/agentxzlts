@@ -9,6 +9,10 @@
       "default": "./service.mjs"
     },
     "./gateway": "./gateway.mjs",
+    "./presence": {
+      "types": "./presence.d.mts",
+      "default": "./presence.mjs"
+    },
     "./archive": "./archive.mjs",
     "./protocol": "./protocol.mjs",
     "./client-bundle": {

@@ -55,6 +55,7 @@ import {
   type IslandFile,
 } from "@island/protocol";
 import { ApiError, api, cmd, time, day, size } from "@/lib/client";
+import { mentionAt, insertMention } from "@/lib/mentions";
 type User = {
   id: string;
   display_name: string;
@@ -287,6 +288,11 @@ export default function Island() {
   const [reply, setReply] = useState<Message | null>(null);
   const [picker, setPicker] = useState<"emoji" | "mention" | null>(null);
   const [mentions, setMentions] = useState<string[]>([]);
+  const [mentionRange, setMentionRange] =
+    useState<ReturnType<typeof mentionAt>>(null);
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const composing = useRef(false);
+  const dismissedMention = useRef<string | null>(null);
   const [pending, setPending] = useState<Pending[]>([]);
   const [task, setTask] = useState<Task | null>(null);
   const [source, setSource] = useState<Message | null>(null);
@@ -412,6 +418,8 @@ export default function Island() {
     setDraft("");
     setReply(null);
     setMentions([]);
+    setMentionRange(null);
+    setPicker(null);
     setConnection("连接中");
     cursor.current = Number(
       sessionStorage.getItem(`island:cursor:${roomId}`) || 0,
@@ -483,7 +491,7 @@ export default function Island() {
       if (navigator.onLine)
         void cmd("presence", {
           room_id: roomId,
-          offline: document.visibilityState !== "visible",
+          offline: false,
         }).catch(() => {});
     };
     presence();
@@ -512,7 +520,7 @@ export default function Island() {
       window.removeEventListener("online", online);
       window.removeEventListener("offline", offline);
       document.removeEventListener("visibilitychange", visible);
-      void cmd("presence", { room_id: roomId, offline: true }).catch(() => {});
+      // 关闭单个标签页不能把另一条仍存活的连接上报为离线。
     };
   }, [roomId, user, load, notify, refreshRooms]);
   useEffect(() => {
@@ -580,6 +588,27 @@ export default function Island() {
   const host = Boolean(me && state && canManage(state.room, me));
   const members =
     state?.participants.filter((p) => p.status === "active") || [];
+  const mentionCandidates = members.filter((p) =>
+    p.display_name
+      .toLocaleLowerCase()
+      .includes((mentionRange?.query || "").toLocaleLowerCase()),
+  );
+  const updateMention = (text: string, caret: number) => {
+    const key = JSON.stringify([text, caret]);
+    if (dismissedMention.current === key) return;
+    dismissedMention.current = null;
+    const range = mentionAt(text, caret);
+    setMentionRange(range);
+    if (
+      range?.start !== mentionRange?.start ||
+      range?.end !== mentionRange?.end ||
+      range?.query !== mentionRange?.query
+    )
+      setMentionIndex(0);
+    setPicker((current) =>
+      range ? "mention" : current === "mention" ? null : current,
+    );
+  };
   const selectRoom = (id: string) => {
     setRoomId(id);
     setPrimary("chat");
@@ -670,12 +699,20 @@ export default function Island() {
   const ask = (title: string, text: string, action: () => Promise<void>) =>
     setConfirm({ title, text, action });
   const mention = (p: Participant) => {
-    setDraft(
-      (d) => `${d}${d && !d.endsWith(" ") ? " " : ""}@${p.display_name} `,
+    const caret = inputRef.current?.selectionStart ?? draft.length;
+    const insertion = insertMention(
+      draft,
+      mentionRange || { start: caret, end: caret },
+      p.display_name,
     );
+    setDraft(insertion.text);
     setMentions((ids) => [...new Set([...ids, p.id])]);
     setPicker(null);
-    inputRef.current?.focus();
+    setMentionRange(null);
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(insertion.caret, insertion.caret);
+    });
   };
   async function more() {
     if (!state) return;
@@ -1370,8 +1407,76 @@ export default function Island() {
                       value={draft}
                       maxLength={8000}
                       rows={1}
-                      onChange={(e) => setDraft(e.target.value)}
+                      onChange={(e) => {
+                        setDraft(e.target.value);
+                        if (
+                          !composing.current &&
+                          !(e.nativeEvent as InputEvent).isComposing
+                        )
+                          updateMention(
+                            e.target.value,
+                            e.target.selectionStart,
+                          );
+                      }}
+                      onSelect={(e) => {
+                        if (
+                          !composing.current &&
+                          document.activeElement === e.currentTarget
+                        )
+                          updateMention(
+                            e.currentTarget.value,
+                            e.currentTarget.selectionStart,
+                          );
+                      }}
+                      onCompositionStart={() => {
+                        composing.current = true;
+                      }}
+                      onCompositionEnd={(e) => {
+                        composing.current = false;
+                        updateMention(
+                          e.currentTarget.value,
+                          e.currentTarget.selectionStart,
+                        );
+                      }}
+                      aria-expanded={picker === "mention"}
+                      aria-controls={
+                        picker === "mention" ? "mention-options" : undefined
+                      }
                       onKeyDown={(e) => {
+                        if (e.nativeEvent.isComposing) return;
+                        if (picker === "mention") {
+                          if (e.key === "Escape") {
+                            e.preventDefault();
+                            dismissedMention.current = JSON.stringify([
+                              draft,
+                              e.currentTarget.selectionStart,
+                            ]);
+                            setPicker(null);
+                            setMentionRange(null);
+                            return;
+                          }
+                          if (["ArrowDown", "ArrowUp"].includes(e.key)) {
+                            e.preventDefault();
+                            setMentionIndex(
+                              (i) =>
+                                (i +
+                                  (e.key === "ArrowDown" ? 1 : -1) +
+                                  mentionCandidates.length) %
+                                Math.max(1, mentionCandidates.length),
+                            );
+                            return;
+                          }
+                          if (e.key === "Enter" && !e.shiftKey) {
+                            e.preventDefault();
+                            if (mentionCandidates.length)
+                              mention(
+                                mentionCandidates[
+                                  mentionIndex % mentionCandidates.length
+                                ],
+                              );
+                            return;
+                          }
+                        }
                         if (
                           e.key === "Enter" &&
                           !e.shiftKey &&
@@ -1386,9 +1491,11 @@ export default function Island() {
                       <button
                         className="icon-button"
                         aria-label="提及成员"
-                        onClick={() =>
-                          setPicker(picker === "mention" ? null : "mention")
-                        }
+                        onClick={() => {
+                          setMentionRange(null);
+                          setMentionIndex(0);
+                          setPicker(picker === "mention" ? null : "mention");
+                        }}
                       >
                         <AtSign size={19} />
                       </button>
@@ -1445,15 +1552,32 @@ export default function Island() {
                             ))}
                           </div>
                         ) : (
-                          <div className="mention-picker">
+                          <div
+                            className="mention-picker"
+                            id="mention-options"
+                            role="listbox"
+                            aria-label="提及房间成员"
+                          >
                             <strong>提及房间成员</strong>
-                            {members.map((p) => (
-                              <button key={p.id} onClick={() => mention(p)}>
+                            {!mentionCandidates.length && (
+                              <small>没有匹配的成员或 Agent</small>
+                            )}
+                            {mentionCandidates.map((p, index) => (
+                              <button
+                                key={p.id}
+                                role="option"
+                                aria-selected={index === mentionIndex}
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={() => mention(p)}
+                              >
                                 <ParticipantAvatar
                                   name={p.display_name}
                                   size={26}
                                 />
                                 {p.display_name}
+                                <small>
+                                  {p.type === "agent" ? "Agent" : "成员"}
+                                </small>
                               </button>
                             ))}
                           </div>
@@ -1738,10 +1862,7 @@ export default function Island() {
                 <ParticipantAvatar
                   name={p.display_name}
                   src={p.avatar_url}
-                  online={
-                    !!p.last_active_at &&
-                    Date.now() - new Date(p.last_active_at).getTime() < 55000
-                  }
+                  online={p.online === true}
                   size={40}
                 />
                 <div>
@@ -1764,9 +1885,7 @@ export default function Island() {
                         <Crown size={11} />
                         主持人
                       </span>
-                    ) : p.last_active_at &&
-                      Date.now() - new Date(p.last_active_at).getTime() <
-                        55000 ? (
+                    ) : p.online ? (
                       "在线"
                     ) : (
                       "离线"

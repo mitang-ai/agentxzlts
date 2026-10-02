@@ -29,6 +29,7 @@ import { subscribe } from "@/lib/realtime";
 import { agents } from "@/lib/agents";
 import { AgentError } from "@island/agents";
 import { nodeClientBundle } from "@island/agents/client-bundle";
+import { participantPresence } from "@island/agents/presence";
 import { scanFile } from "@/lib/scanner";
 import {
   publicSite,
@@ -392,6 +393,8 @@ async function handle(
         let result;
         if (action === "pairing")
           result = await agents.createPairing(user.id, roomId);
+        else if (action === "delete-pairings")
+          result = await agents.deletePairings(user.id, input);
         else if (action === "revoke-pairing")
           result = await agents.revokePairing(
             user.id,
@@ -404,6 +407,8 @@ async function handle(
           result = await agents.seatAction(user.id, roomId, action, input);
         else if (action === "brief")
           result = await agents.publishBrief(user.id, roomId, input);
+        else if (action === "delete-seats")
+          result = await agents.deleteSeats(user.id, roomId, input);
         else if (action === "acknowledge")
           result = await agents.acknowledge(user.id, roomId, input.brief_id);
         else if (action === "start")
@@ -700,6 +705,11 @@ async function handle(
         );
         return NextResponse.json({
           ...state,
+          participants: await participantPresence(
+            pool,
+            state.participants,
+            roomId,
+          ),
           capabilities: await capabilities(user, roomId),
         });
       }

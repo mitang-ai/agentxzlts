@@ -22,6 +22,7 @@ export type Participant = {
   status: "active" | "left";
   last_read_event_id: number;
   last_active_at: string | null;
+  online?: boolean;
 };
 export type Room = {
   id: string;
@@ -110,6 +111,9 @@ export type AgentTurn = {
     base_file_id: string | null;
     base_hash: string | null;
     file_ids: string[];
+    requirements_file_ids?: string[];
+    design_file_ids?: string[];
+    documents?: { id: string; name: string; mime_type: string }[];
   } | null;
   session: Record<string, unknown> | null;
   participants: Pick<Participant, "id" | "type" | "display_name">[];

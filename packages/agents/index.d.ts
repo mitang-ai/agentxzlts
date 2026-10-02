@@ -5,6 +5,7 @@ export class AgentService {
   adminRevoke(adminId: string, nodeId: string, reason: string): Promise<any>;
   state(userId: string, roomId: string): Promise<any>;
   createPairing(userId: string, roomId: string): Promise<any>;
+  deletePairings(userId: string, input: any): Promise<any>;
   revokePairing(
     userId: string,
     roomId: string,
@@ -17,6 +18,7 @@ export class AgentService {
     input: any,
   ): Promise<any>;
   publishBrief(userId: string, roomId: string, input: any): Promise<any>;
+  deleteSeats(userId: string, roomId: string, input: any): Promise<any>;
   acknowledge(userId: string, roomId: string, briefId: string): Promise<any>;
   startSession(userId: string, roomId: string, input: any): Promise<any>;
   sessionAction(
