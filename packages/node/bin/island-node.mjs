@@ -31,6 +31,8 @@ else if (
   );
 const file = configPath();
 const nonInteractive = args.includes("--non-interactive");
+// MCP 的 stdout 只能输出 JSON-RPC；安装/连接日志去 stderr。
+if (command === "mcp") console.log = (...values) => console.error(...values);
 async function prepare() {
   try {
     await import("ws");
@@ -53,7 +55,7 @@ async function prepare() {
     ];
   await new Promise((yes, no) => {
     const child = spawn(cmd, parameters, {
-      stdio: "inherit",
+      stdio: command === "mcp" ? ["inherit", 2, 2] : "inherit",
       windowsHide: true,
     });
     child.once("error", no);
@@ -79,15 +81,24 @@ async function init() {
     const adapter =
       value("adapter") ||
       (await ask(
-        "本机 Agent 类型（codex/claude/opencode/acp/cli/a2a/http）",
-        existing.adapter || "codex",
+        "当前 Agent 接入类型（GUI 宿主选 mcp；或 codex/claude/opencode/acp/cli/a2a/http）",
+        existing.adapter || "",
       ));
     if (
-      !["codex", "claude", "opencode", "acp", "cli", "a2a", "http"].includes(
-        adapter,
-      )
+      ![
+        "mcp",
+        "codex",
+        "claude",
+        "opencode",
+        "acp",
+        "cli",
+        "a2a",
+        "http",
+      ].includes(adapter)
     )
-      throw Error("所选本机 Agent 类型无效。");
+      throw Error(
+        "请明确选择当前 Agent 的接入类型；不会默认转发给 Codex。GUI Agent 请选 mcp。",
+      );
     const workspace = resolve(
       value("workspace") ||
         (await ask(
@@ -115,6 +126,7 @@ async function init() {
       server,
       workspace,
       adapter,
+      host_name: value("host") || existing.host_name || "",
       allow_development,
       node_name:
         value("name") ||
@@ -191,6 +203,7 @@ async function pair(config) {
       capabilities: {
         development: config.allow_development,
         workspace: !!config.workspace,
+        ...(config.host_name ? { host_name: config.host_name } : {}),
       },
     }),
   });
@@ -218,7 +231,14 @@ function verifyExisting(config) {
     throw Error(
       "此配置属于另一个已配对 Agent；请为新配对码省略 --config 自动隔离，或指定新的配置路径，不能覆盖已有身份。",
     );
-  for (const key of ["server", "adapter", "workspace", "command", "endpoint"]) {
+  for (const key of [
+    "server",
+    "adapter",
+    "workspace",
+    "command",
+    "endpoint",
+    "host",
+  ]) {
     const requested = value(key);
     if (
       requested &&
@@ -226,7 +246,7 @@ function verifyExisting(config) {
         ? resolve(requested)
         : key === "server"
           ? serverURL(requested)
-          : requested) !== config[key]
+          : requested) !== config[key === "host" ? "host_name" : key]
     )
       throw Error(
         "已有 Agent 配置与本次参数不一致；请使用独立配置，不会自动修改正在使用的 Agent。",
@@ -240,7 +260,7 @@ function verifyExisting(config) {
 }
 try {
   if (
-    ["bootstrap", "init", "pair", "start"].includes(command) &&
+    ["bootstrap", "init", "pair", "start", "mcp"].includes(command) &&
     !args.includes("--help")
   ) {
     await prepare();
@@ -280,7 +300,49 @@ try {
     verifyExisting(config);
     if (!config) config = await init();
     if (!config.token) config = await pair(config);
-    await start(config);
+    if (config.adapter === "mcp") {
+      const mcpConfig = {
+        mcpServers: {
+          ["island-" + config.participant_id]: {
+            type: "stdio",
+            command: process.execPath,
+            args: [
+              resolve(import.meta.dirname, "island-node.mjs"),
+              "mcp",
+              "--config",
+              file,
+            ],
+          },
+        },
+      };
+      console.log(
+        "请将以下独立服务加入当前宿主的 MCP 配置；不要启动其它 Agent CLI：",
+      );
+      console.log(JSON.stringify(mcpConfig, null, 2));
+    } else await start(config);
+  } else if (command === "mcp") {
+    const config = await readJSON(file);
+    if (!config?.token || config.adapter !== "mcp")
+      throw Error("MCP 宿主模式需要已配对的 mcp 专用配置，不会复用 CLI 席位。");
+    const { IslandNode } = await import("../src/client.mjs");
+    const { serveHostMCP } = await import("../src/host-mcp.mjs");
+    const node = new IslandNode(config, {
+      configFile: file,
+      instanceLease,
+      logger: console.error,
+    });
+    runningNode = node;
+    const serving = serveHostMCP(node);
+    const running = node.start().catch((error) => {
+      console.error(error.message);
+      node.stop();
+    });
+    try {
+      await serving;
+    } finally {
+      node.stop();
+    }
+    await running;
   } else if (command === "init") {
     await init();
   } else if (command === "pair") {
@@ -288,7 +350,12 @@ try {
     if (!config) config = await init();
     await pair(config);
   } else if (command === "start") {
-    await start(await readJSON(file));
+    const config = await readJSON(file);
+    if (config?.adapter === "mcp")
+      throw Error(
+        "宿主直连请使用 mcp 命令并由当前宿主启动，不能后台转发到其它 CLI。",
+      );
+    await start(config);
   } else if (command === "status") {
     const config = await readJSON(file);
     if (!config) throw Error("本机尚未配置。");
@@ -307,6 +374,8 @@ try {
         {
           server: config.server,
           agent: config.agent_name,
+          adapter: config.adapter,
+          host: config.host_name || null,
           node: config.node_name,
           room_id: config.room_id,
           workspace: config.workspace,

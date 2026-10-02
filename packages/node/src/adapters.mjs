@@ -4,6 +4,7 @@ import { readFile, writeFile, mkdir, lstat } from "node:fs/promises";
 import { resolve, relative, isAbsolute, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { turnResultSchema } from "../../agents/protocol.mjs";
+import { HostAdapter } from "./host-adapter.mjs";
 export function parseResult(value) {
   if (typeof value === "object" && value) return turnResultSchema.parse(value);
   const text = String(value)
@@ -737,6 +738,30 @@ export class ACPAdapter {
   async disconnect() {}
 }
 export function createAdapter(config) {
+  if (config.adapter === "mcp") return new HostAdapter(config);
+  if (
+    !["codex", "claude", "opencode", "cli", "acp", "http", "a2a"].includes(
+      config.adapter,
+    )
+  )
+    throw Error(
+      "必须明确选择当前 Agent 的接入类型，不会自动转发给 Codex 或其它 CLI。",
+    );
+  if (["cli", "acp"].includes(config.adapter) && !config.command)
+    throw Error(
+      "此接入类型必须填写当前 Agent 的真实程序，不能回退到其它 CLI。",
+    );
+  if (["http", "a2a"].includes(config.adapter) && !config.endpoint)
+    throw Error("此接入类型必须填写当前 Agent 的服务地址。");
+  if (
+    /work\s*buddy|workbuddy|hermes|openclaw/i.test(
+      config.host_name || config.agent_name || "",
+    ) &&
+    ["codex", "claude", "opencode"].includes(config.adapter)
+  )
+    throw Error(
+      "当前宿主不能交给其它 Agent CLI 执行，请使用 mcp 宿主直连或它自己的程序接口。",
+    );
   if (config.adapter === "acp") return new ACPAdapter(config);
   if (config.adapter === "a2a") return new A2AAdapter(config);
   if (config.adapter === "http") return new HTTPAdapter(config);

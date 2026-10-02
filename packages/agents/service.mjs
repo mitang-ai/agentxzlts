@@ -156,6 +156,7 @@ export class AgentService {
         node_name: name,
         agent_name: z.string().trim().min(1).max(40),
         adapter: z.enum([
+          "mcp",
           "codex",
           "claude",
           "opencode",
@@ -169,10 +170,21 @@ export class AgentService {
           .object({
             development: z.boolean().default(false),
             workspace: z.boolean().default(false),
+            host_name: z.string().trim().min(1).max(80).optional(),
           })
           .default({ development: false, workspace: false }),
       })
       .parse(input);
+    if (
+      /work\s*buddy|hermes|openclaw/i.test(
+        data.capabilities.host_name || data.agent_name,
+      ) &&
+      ["codex", "claude", "opencode"].includes(data.adapter)
+    )
+      fail(
+        400,
+        "当前宿主不能绑定到其它 Agent CLI，请选择 mcp 或当前产品的真实接口。",
+      );
     const token = secret();
     return this.transaction(async (db) => {
       const { pairing, room } = await this.pairingAccess(db, data.code);
@@ -1677,6 +1689,13 @@ export class AgentService {
       await db.query("select id from rooms where id=$1 for update", [
         target.room_id,
       ]);
+      const previous = (
+        await db.query(
+          "select revoked_at from agent_nodes where id=$1 for update",
+          [target.node_id],
+        )
+      ).rows[0];
+      if (previous.revoked_at) return { ok: true, already_revoked: true };
       await db.query(
         "update agent_nodes set revoked_at=now(),session_id=null,last_seen_at=null where id=$1",
         [target.node_id],

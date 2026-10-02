@@ -202,6 +202,37 @@ describe.sequential("连接、记录清理与文件需求", () => {
       await pool.query("delete from agent_nodes where id=$1", [node.node_id]);
     }
   });
+  it("服务器拒绝把 WorkBuddy 绑定到 Codex，保留原码供正确的 MCP 宿主配对", async () => {
+    const pairing = await service.createPairing(users[0], room);
+    const input = {
+      code: pairing.code,
+      node_name: "宿主设备",
+      agent_name: "WorkBuddy",
+      adapter: "codex",
+      fingerprint: randomUUID(),
+      capabilities: { host_name: "WorkBuddy" },
+    };
+    await expect(service.pair(input)).rejects.toMatchObject({ status: 400 });
+    const node = await service.pair({ ...input, adapter: "mcp" });
+    try {
+      const state = await service.state(users[0], room);
+      expect(
+        state.seats.find((s: any) => s.participant_id === node.participant_id),
+      ).toMatchObject({
+        adapter: "mcp",
+        capabilities: { host_name: "WorkBuddy" },
+      });
+      const files = await readArchive(await nodeClientBundle(process.cwd()));
+      expect(files.has("packages/node/src/host-adapter.mjs")).toBe(true);
+      expect(files.has("packages/node/src/host-mcp.mjs")).toBe(true);
+    } finally {
+      await pool.query("delete from participants where id=$1", [
+        node.participant_id,
+      ]);
+      await pool.query("delete from agent_pairings where id=$1", [pairing.id]);
+      await pool.query("delete from agent_nodes where id=$1", [node.node_id]);
+    }
+  });
   it("自己的待连接邀请跨房间显示，单删释放配额且删除的码失效", async () => {
     const a = await service.createPairing(users[0], room),
       b = await service.createPairing(users[0], otherRoom);
