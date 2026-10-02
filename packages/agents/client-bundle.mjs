@@ -41,7 +41,7 @@ export async function nodeClientBundle(root) {
     "connect.sh",
     Buffer.from(
       shell.slice(0, shell.lastIndexOf('case "${1:-}"')) +
-        "exec node packages/node/bin/island-node.mjs bootstrap\n",
+        'exec node packages/node/bin/island-node.mjs bootstrap "$@"\n',
     ),
   );
   const ps = await readFile(
@@ -51,14 +51,16 @@ export async function nodeClientBundle(root) {
   files.set(
     "scripts/node-bootstrap.ps1",
     Buffer.from(
-      ps.slice(0, ps.lastIndexOf("if ($Stop)")) +
-        "& node packages/node/bin/island-node.mjs bootstrap\nexit $LASTEXITCODE\n",
+      ps
+        .slice(0, ps.lastIndexOf("if ($Stop)"))
+        .replace(/^param\([^\n]*\)\r?\n/, "$nodeArguments = $args\n") +
+        "& node packages/node/bin/island-node.mjs bootstrap @nodeArguments\nexit $LASTEXITCODE\n",
     ),
   );
   files.set(
     "connect.cmd",
     Buffer.from(
-      '@echo off\r\ncd /d "%~dp0"\r\npowershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\\node-bootstrap.ps1"\r\nif errorlevel 1 pause\r\n',
+      '@echo off\r\ncd /d "%~dp0"\r\npowershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\\node-bootstrap.ps1" %*\r\nif errorlevel 1 pause\r\n',
     ),
   );
   files.set(

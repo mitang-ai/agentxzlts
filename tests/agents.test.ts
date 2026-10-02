@@ -123,6 +123,9 @@ describe.sequential("真实远端 Agent 权限、有界主持、需求对齐与�
       ])
     ).rows[0];
     expect(stored.code_hash).not.toBe(pairing.code);
+    // 下载客户端不消耗配对码，随后仍能实际配对。
+    await service.authorizeClientDownload(pairing.code);
+    await service.authorizeClientDownload(pairing.code);
     worker = await service.pair({
       code: pairing.code,
       node_name: "异地设备 B",
@@ -141,6 +144,9 @@ describe.sequential("真实远端 Agent 权限、有界主持、需求对齐与�
       }),
     ).rejects.toThrow("已使用");
     workerConnection = await service.connect(worker.token);
+    await expect(service.authorizeClientDownload(pairing.code)).rejects.toThrow(
+      "已使用",
+    );
     await expect(claim(worker, workerConnection)).rejects.toThrow("未批准");
     await expect(
       service.seatAction(users[1], room, "approve", {
@@ -148,6 +154,34 @@ describe.sequential("真实远端 Agent 权限、有界主持、需求对齐与�
       }),
     ).rejects.toThrow("人类房间管理者");
     await expect(service.state(users[2], room)).rejects.toThrow("权限");
+  });
+  it("客户端自动下载拒绝无效、过期、撤销的配对码及被冻结的房间", async () => {
+    await expect(
+      service.authorizeClientDownload("invalid-pairing-code-123456"),
+    ).rejects.toThrow("配对码");
+    const expired = await service.createPairing(users[0], room);
+    await pool.query(
+      "update agent_pairings set expires_at=now()-interval '1 second' where id=$1",
+      [expired.id],
+    );
+    await expect(service.authorizeClientDownload(expired.code)).rejects.toThrow(
+      "已过期",
+    );
+    const revoked = await service.createPairing(users[0], room);
+    await service.revokePairing(users[0], room, revoked.id);
+    await expect(service.authorizeClientDownload(revoked.code)).rejects.toThrow(
+      "无效",
+    );
+    const frozen = await service.createPairing(users[0], room);
+    try {
+      await pool.query("update rooms set status='frozen' where id=$1", [room]);
+      await expect(
+        service.authorizeClientDownload(frozen.code),
+      ).rejects.toThrow("冻结");
+    } finally {
+      await pool.query("update rooms set status='active' where id=$1", [room]);
+      await service.revokePairing(users[0], room, frozen.id);
+    }
   });
   it("人类批准 Agent、选定讨论主持人，仍然保留人类房间管理权限", async () => {
     await service.seatAction(users[0], room, "approve", {

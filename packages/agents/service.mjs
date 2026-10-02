@@ -111,6 +111,39 @@ export class AgentService {
       return { ...row, code };
     });
   }
+  async pairingAccess(db, code) {
+    z.string().min(20).max(128).parse(code);
+    const pairing = (
+      await db.query("select * from agent_pairings where code_hash=$1", [
+        digest(code),
+      ])
+    ).rows[0];
+    if (!pairing) fail(403, "配对码无效或已使用。");
+    const { room } = await this.room(
+      db,
+      pairing.room_id,
+      pairing.owner_user_id,
+      {
+        write: true,
+      },
+    );
+    await this.enabled(db, pairing.owner_user_id, room.id);
+    const locked = (
+      await db.query("select * from agent_pairings where id=$1 for update", [
+        pairing.id,
+      ])
+    ).rows[0];
+    if (
+      locked.used_at ||
+      locked.revoked_at ||
+      new Date(locked.expires_at) <= new Date()
+    )
+      fail(403, "配对码无效、已使用或已过期。");
+    return { pairing: locked, room };
+  }
+  async authorizeClientDownload(code) {
+    await this.transaction((db) => this.pairingAccess(db, code));
+  }
   async pair(input) {
     const data = z
       .object({
@@ -137,30 +170,7 @@ export class AgentService {
       .parse(input);
     const token = secret();
     return this.transaction(async (db) => {
-      const pairing = (
-        await db.query("select * from agent_pairings where code_hash=$1", [
-          digest(data.code),
-        ])
-      ).rows[0];
-      if (!pairing) fail(403, "配对码无效或已使用。");
-      const { room } = await this.room(
-        db,
-        pairing.room_id,
-        pairing.owner_user_id,
-        { write: true },
-      );
-      await this.enabled(db, pairing.owner_user_id, room.id);
-      const locked = (
-        await db.query("select * from agent_pairings where id=$1 for update", [
-          pairing.id,
-        ])
-      ).rows[0];
-      if (
-        locked.used_at ||
-        locked.revoked_at ||
-        new Date(locked.expires_at) < new Date()
-      )
-        fail(403, "配对码无效、已使用或已过期。");
+      const { pairing, room } = await this.pairingAccess(db, data.code);
       if (
         Number(
           (

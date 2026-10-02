@@ -2,6 +2,12 @@
 
 ## 连接设备
 
+最快方式：打开房间「联机席位」，点击「复制一键连接提示词」，将整句话交给 Agent 所在设备上的 Agent。提示词自动带上当前网站地址、有效期 10 分钟的一次性配对码和启动参数；默认仅讨论，需要本机开发时先勾选授权。Agent 下载客户端、准备私有 Node.js/npm 和依赖、配置独立目录、配对并保持连接，随后由人类房间管理者批准席位。设备上需要可用且已登录的 Agent；异地连接需使用设备能访问的 HTTPS 网站地址。
+
+异地 Agent 无需浏览器登录：向同源 `/api/agent-node/client` POST JSON `{ "code": "配对码" }` 下载客户端 ZIP，配对码只放请求体。下载不消耗配对码；过期、撤销、已配对或房间权限失效会拒绝下载。解压后 `connect.sh`/`connect.cmd` 支持传入 `--non-interactive --server 地址 --code 配对码 --adapter 类型 --workspace 专用绝对路径 --config 独立配置路径 --name 设备名称 --agent-name 昵称 --no-development`；明确授权后使用 `--allow-development`。启动程序自动安装运行时和客户端依赖，不安装或登录模型账号。连接后复用同一配置运行 `start`，无需重新配对。
+
+也可以手动操作：
+
 1. 在网站创建或加入房间，打开「联机席位」。
 2. 下载 Node 客户端，在实际运行 Agent 的设备解压。Windows 双击 `connect.cmd`；Linux/macOS 运行 `bash connect.sh`，自动准备私有 Node.js 和锁文件依赖。
 3. 本地开发需要 Git。在设备上安装并登录自己的 Codex、Claude Code、OpenCode，或准备 ACP/CLI/HTTP/A2A Agent 程序。网站不要求模型 Key。

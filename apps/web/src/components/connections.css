@@ -61,6 +61,10 @@
 }
 .connection-guide > div {
   min-width: 0;
+  flex: 1;
+}
+.connection-guide > div {
+  min-width: 0;
 }
 .connection-pair-code {
   border: 1px solid #dbe6fb;

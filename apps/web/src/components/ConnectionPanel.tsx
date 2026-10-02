@@ -22,6 +22,22 @@ import type { RoomState } from "@island/protocol";
 import { api, size } from "@/lib/client";
 import "./connections.css";
 type Row = Record<string, any>;
+function connectionPrompt(origin: string, pairing: Row, development: boolean) {
+  return (
+    [
+      `请在你所在的设备自动安装并连接协作岛房间`,
+      `先检测操作系统和本机可用且已登录的 Agent，优先使用你当前所用的 Codex、Claude Code 或 OpenCode`,
+      `向 ${origin}/api/agent-node/client 发送 POST 请求（Content-Type: application/json，请求体 ${JSON.stringify({ code: pairing.code })}）下载客户端 ZIP，无需网页登录，配对码只放请求体`,
+      `将客户端解压到新的专用目录，在该目录运行 Windows 的 connect.cmd 或 Linux/macOS 的 bash connect.sh，启动程序会自动准备 Node.js 22+、npm 和客户端依赖`,
+      `给启动程序传入 --non-interactive --server ${JSON.stringify(origin)} --code ${JSON.stringify(pairing.code)} --config ${JSON.stringify(`.data/connections/${pairing.id}/config.json`)} --adapter 本机Agent类型 --workspace 专用工作目录的绝对路径 --name 设备名称 --agent-name 你的昵称 ${development ? "--allow-development" : "--no-development"}，占位参数请根据本机情况填写真实值`,
+      development
+        ? `我授权你在上述专用工作目录下的隔离子目录开发，请检测并准备 Git，收到聊天室批准的任务后再执行开发`
+        : `本次仅授权联机讨论，本机开发保持关闭`,
+      `配对码有效至 ${new Date(pairing.expires_at).toISOString()} 且只能配对一次，首次连接成功后保持客户端在后台运行并保存进程号和日志；重新启动使用同一配置的 start 命令，不要重复配对`,
+      `加入后等待人类管理者审批及点名，最后报告连接状态、日志位置、重新启动和停止方法；若设备无法访问网站、没有可用的已登录 Agent、或配对码失效，请明确报告原因`,
+    ].join("；") + "。"
+  );
+}
 const stages: Record<string, string> = {
   discussing: "主持讨论",
   aligning: "对齐需求与分工",
@@ -61,6 +77,8 @@ export default function ConnectionPanel({
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
     [pairing, setPairing] = useState<Row | null>(null),
+    [siteOrigin, setSiteOrigin] = useState(""),
+    [promptDevelopment, setPromptDevelopment] = useState(false),
     [requirements, setRequirements] = useState(""),
     [design, setDesign] = useState(""),
     [baseId, setBaseId] = useState(""),
@@ -79,6 +97,22 @@ export default function ConnectionPanel({
       setError((e as Error).message);
     }
   }, [roomId]);
+  useEffect(() => {
+    setSiteOrigin(window.location.origin);
+    setPairing(null);
+    setPromptDevelopment(false);
+  }, [roomId]);
+  useEffect(() => {
+    if (
+      pairing &&
+      (new Date(pairing.expires_at).getTime() <= Date.now() ||
+        data?.pairings?.some(
+          (row: Row) =>
+            row.id === pairing.id && (row.used_at || row.revoked_at),
+        ))
+    )
+      setPairing(null);
+  }, [pairing, data?.pairings]);
   useEffect(() => {
     void refresh();
     const timer = setInterval(() => void refresh(), 3000);
@@ -148,6 +182,30 @@ export default function ConnectionPanel({
     setDraft(
       draft.map((row, i) => (i === index ? { ...row, [key]: value } : row)),
     );
+  const prompt =
+    pairing && siteOrigin
+      ? connectionPrompt(siteOrigin, pairing, promptDevelopment)
+      : "";
+  const copyText = async (text: string, success: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      notify(success);
+    } catch {
+      notify("浏览器未允许自动复制，请选中下方文本手动复制。");
+    }
+  };
+  const copyConnectionPrompt = async () => {
+    let current = pairing;
+    if (!current || new Date(current.expires_at).getTime() <= Date.now()) {
+      current = await request("pairing");
+      if (!current) return;
+      setPairing(current);
+    }
+    await copyText(
+      connectionPrompt(window.location.origin, current, promptDevelopment),
+      "一键连接提示词已复制，交给 Agent 所在设备上的 Agent 即可。",
+    );
+  };
   if (!data)
     return (
       <div className="connection-panel">
@@ -179,11 +237,35 @@ export default function ConnectionPanel({
         <div>
           <strong>连接自己的 Agent</strong>
           <p>
-            在 Agent 所在设备下载并解压 Node 客户端，Windows 打开
-            connect.cmd，Linux/macOS 运行 bash
-            connect.sh。填写网站地址和配对码；本机程序及工作目录在那台设备上设置，加入后等待人类管理者批准。
+            复制一键连接提示词，交给另一台设备上的
+            Agent，它会自行下载、安装并申请加入房间，随后等待人类管理者批准。
           </p>
+          <label className="connection-check">
+            <input
+              type="checkbox"
+              checked={promptDevelopment}
+              onChange={(event) => setPromptDevelopment(event.target.checked)}
+            />
+            允许此 Agent 在本机专用工作目录内开发（仍需批准聊天室任务）
+          </label>
+          {siteOrigin &&
+            /^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::|$)/.test(
+              siteOrigin,
+            ) && (
+              <p>
+                当前地址仅供本机连接；异地设备请从可访问的 HTTPS
+                网站打开本房间后复制提示词。
+              </p>
+            )}
           <div className="connection-actions">
+            <button
+              className="primary compact"
+              disabled={busy || !state.capabilities?.agents}
+              onClick={() => void copyConnectionPrompt()}
+            >
+              <Copy size={15} />
+              复制一键连接提示词
+            </button>
             <a
               className="secondary compact"
               href={`/api/rooms/${roomId}/agents/client`}
@@ -192,7 +274,7 @@ export default function ConnectionPanel({
               下载 Node 客户端
             </a>
             <button
-              className="primary compact"
+              className="secondary compact"
               disabled={busy || !state.capabilities?.agents}
               onClick={async () => {
                 const result = await request("pairing");
@@ -203,6 +285,22 @@ export default function ConnectionPanel({
               生成设备配对码
             </button>
           </div>
+          {prompt && (
+            <label>
+              一键连接提示词
+              <textarea
+                aria-label="一键连接提示词"
+                readOnly
+                rows={6}
+                value={prompt}
+                onFocus={(event) => event.target.select()}
+              />
+              <small>
+                提示词含一次性配对码，有效期 10
+                分钟，仅交给你要连接的设备；用过后重新生成。
+              </small>
+            </label>
+          )}
         </div>
       </div>
       {pairing && (
@@ -218,11 +316,7 @@ export default function ConnectionPanel({
           <div className="connection-actions">
             <button
               className="secondary compact"
-              onClick={() =>
-                void navigator.clipboard
-                  .writeText(pairing.code)
-                  .then(() => notify("配对码已复制"))
-              }
+              onClick={() => void copyText(pairing.code, "配对码已复制")}
             >
               <Copy size={14} />
               复制配对码

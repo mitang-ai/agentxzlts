@@ -2,6 +2,8 @@ import { WebSocketServer, WebSocket } from "ws";
 import { z } from "zod";
 import { isIP } from "node:net";
 import { AgentService } from "./service.mjs";
+import { nodeClientBundle } from "./client-bundle.mjs";
+import { repositoryRoot } from "@island/runtime";
 import {
   WIRE_VERSION,
   WIRE_MAX_BYTES,
@@ -87,7 +89,10 @@ export function attachGateway(server, pool, storage, env = process.env) {
     try {
       if (!originAllowed(req)) throw new AgentError(403, "Node 请求来源无效。");
       await checkIP(sourceIP(req));
-      if (path === "/api/agent-node/pair" && req.method === "POST") {
+      if (
+        ["/api/agent-node/pair", "/api/agent-node/client"].includes(path) &&
+        req.method === "POST"
+      ) {
         const ip = sourceIP(req) || "local",
           now = Date.now(),
           rate = rates.get(ip);
@@ -98,10 +103,22 @@ export function attachGateway(server, pool, storage, env = process.env) {
         if (rates.size > 10000)
           for (const [key, value] of rates)
             if (value.until < now) rates.delete(key);
-        const result = await service.pair(
-          JSON.parse((await drain(req, 16384)).toString()),
-        );
-        response(res, 200, { protocol_version: WIRE_VERSION, ...result });
+        const input = JSON.parse((await drain(req, 16384)).toString());
+        if (path === "/api/agent-node/client") {
+          await service.authorizeClientDownload(input?.code);
+          const bytes = await nodeClientBundle(repositoryRoot());
+          res.writeHead(200, {
+            "content-type": "application/zip",
+            "content-disposition":
+              "attachment; filename=island-node-client.zip",
+            "cache-control": "private,no-store",
+            "x-content-type-options": "nosniff",
+          });
+          res.end(bytes);
+        } else {
+          const result = await service.pair(input);
+          response(res, 200, { protocol_version: WIRE_VERSION, ...result });
+        }
       } else if (
         path.startsWith("/api/agent-node/files/") &&
         req.method === "GET"

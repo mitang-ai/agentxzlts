@@ -14,6 +14,7 @@ const value = (key) => {
 };
 if (value("config")) process.env.ISLAND_NODE_CONFIG = resolve(value("config"));
 const file = configPath();
+const nonInteractive = args.includes("--non-interactive");
 async function prepare() {
   try {
     await import("ws");
@@ -48,6 +49,7 @@ async function init() {
   const existing = await readJSON(file, {});
   const rl = createInterface({ input: stdin, output: stdout });
   const ask = async (label, fallback) => {
+    if (nonInteractive) return fallback || "";
     const answer = await rl.question(
       label + (fallback ? " [" + fallback + "]" : "") + "：",
     );
@@ -76,14 +78,21 @@ async function init() {
           existing.workspace || resolve(".data/agent-workspaces"),
         )),
     );
-    const allow_development =
-      args.includes("--allow-development") ||
-      /^y(es)?$/i.test(
-        await ask(
-          "允许 Agent 在此目录下的隔离子目录开发？输入 yes 授权",
-          existing.allow_development ? "yes" : "no",
-        ),
-      );
+    if (
+      args.includes("--allow-development") &&
+      args.includes("--no-development")
+    )
+      throw Error("不能同时允许和禁止本机开发。");
+    const allow_development = args.includes("--no-development")
+      ? false
+      : args.includes("--allow-development") ||
+        (!nonInteractive &&
+          /^y(es)?$/i.test(
+            await ask(
+              "允许 Agent 在此目录下的隔离子目录开发？输入 yes 授权",
+              existing.allow_development ? "yes" : "no",
+            ),
+          ));
     const config = {
       ...existing,
       server,
@@ -142,6 +151,7 @@ async function init() {
 async function pair(config) {
   const rl = createInterface({ input: stdin, output: stdout });
   let code = value("code");
+  if (!code && nonInteractive) throw Error("非交互配对需要 --code 配对码。");
   try {
     code ||= (await rl.question("在房间“联机席位”取得的配对码：")).trim();
   } finally {
@@ -182,7 +192,7 @@ async function start(config) {
 try {
   if (command === "help" || args.includes("--help"))
     console.log(
-      "协作岛异地 Node\n  bootstrap  自动准备依赖、配置、配对并连接\n  init       设置本机 Agent 与明确授权的工作目录\n  pair       用房间配对码申请联机席位\n  start      连接并等待受控发言/任务\n  status     查看设备配置（隐藏凭据）\n  pull       下载房间成果 ZIP，需 --file 文件 ID --out 保存路径\n支持 --config 本机配置文件；Ctrl+C 断开并停止本地执行。",
+      "协作岛异地 Node\n  bootstrap  自动准备依赖、配置、配对并连接\n  init       设置本机 Agent 与明确授权的工作目录\n  pair       用房间配对码申请联机席位\n  start      连接并等待受控发言/任务\n  status     查看设备配置（隐藏凭据）\n  pull       下载房间成果 ZIP，需 --file 文件 ID --out 保存路径\n支持 --config 本机配置文件；自动连接可用 --non-interactive --server 地址 --code 配对码 --adapter 类型 --workspace 目录 --name 设备名称 --agent-name 昵称；默认仅讨论，--allow-development 明确授权开发，--no-development 仅讨论；Ctrl+C 断开并停止本地执行。",
     );
   else if (command === "bootstrap") {
     await prepare();

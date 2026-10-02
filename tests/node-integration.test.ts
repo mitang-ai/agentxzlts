@@ -19,8 +19,6 @@ import WebSocket from "ws";
 import { attachGateway } from "../packages/agents/gateway.mjs";
 // @ts-ignore
 import { writeArchive, readArchive } from "../packages/agents/archive.mjs";
-// @ts-ignore
-import { nodeClientBundle } from "../packages/agents/client-bundle.mjs";
 import { createStorage } from "../packages/runtime/storage.mjs";
 const pool = new Pool({
   connectionString:
@@ -36,6 +34,7 @@ let root: string,
   url: string,
   cert: Buffer;
 const children: ChildProcess[] = [];
+const bootstrapChildren: ChildProcess[] = [];
 const logs: string[] = [];
 let nodes: any[] = [],
   session: any,
@@ -82,7 +81,12 @@ async function human(command: string, data: any) {
     db.release();
   }
 }
-async function httpsJSON(path: string, data: any, extraHeaders = {}) {
+async function httpsJSON(
+  path: string,
+  data: any,
+  extraHeaders = {},
+  binary = false,
+) {
   return new Promise<any>((yes, no) => {
     const req = request(
       new URL(path, url),
@@ -92,12 +96,15 @@ async function httpsJSON(path: string, data: any, extraHeaders = {}) {
         headers: { "content-type": "application/json", ...extraHeaders },
       },
       (res) => {
-        let body = "";
-        res.on("data", (b) => {
-          body += b;
-        });
+        const chunks: Buffer[] = [];
+        res.on("data", (b) => chunks.push(b));
         res.on("end", () =>
-          yes({ status: res.statusCode, data: JSON.parse(body) }),
+          yes({
+            status: res.statusCode,
+            data: binary
+              ? Buffer.concat(chunks)
+              : JSON.parse(Buffer.concat(chunks).toString()),
+          }),
         );
       },
     );
@@ -176,11 +183,12 @@ beforeAll(async () => {
   ).id;
 }, 30000);
 afterAll(async () => {
-  for (const child of children)
+  const allChildren = [...children, ...bootstrapChildren];
+  for (const child of allChildren)
     if (child.exitCode === null) child.kill("SIGTERM");
   await Promise.all(
-    children.map((child) =>
-      child.exitCode !== null
+    allChildren.map((child) =>
+      child.exitCode !== null || child.signalCode !== null
         ? Promise.resolve()
         : Promise.race([
             once(child, "exit"),
@@ -215,7 +223,24 @@ describe.sequential(
   "两个独立进程经真实 TLS/WSS 联机，在各自工作目录开发并回传",
   () => {
     it("可下载的独立客户端包能从锁文件安装，不包含服务器代码、凭据和工作区数据", async () => {
-      const files = await readArchive(await nodeClientBundle(process.cwd()));
+      const pairing = await service.createPairing(user, room);
+      const invalid = await httpsJSON("/api/agent-node/client", {
+        code: "invalid-pairing-code-123456",
+      });
+      expect(invalid.status).toBe(403);
+      // 模拟异地 Agent：无 Cookie，通过 HTTPS 请求体中的配对码取得实际安装包。
+      const download = await httpsJSON(
+        "/api/agent-node/client",
+        { code: pairing.code },
+        {},
+        true,
+      );
+      expect(download.status).toBe(200);
+      const files = await readArchive(download.data);
+      expect(files.get("connect.sh")!.toString()).toContain('bootstrap "$@"');
+      expect(files.get("scripts/node-bootstrap.ps1")!.toString()).toContain(
+        "bootstrap @nodeArguments",
+      );
       expect(files.has("connect.cmd")).toBe(true);
       expect(files.has("connect.sh")).toBe(true);
       expect(
@@ -237,6 +262,100 @@ describe.sequential(
           bundleRoot,
         ),
       ).toContain("协作岛");
+      await service.revokePairing(user, room, pairing.id);
+      expect(
+        (await httpsJSON("/api/agent-node/client", { code: pairing.code }))
+          .status,
+      ).toBe(403);
+    }, 60000);
+    it("下载后的启动程序能无交互安装配置、配对并连接，默认仅讨论且重复启动复用凭据", async () => {
+      const bootstrapRoom = (
+        await human("create_room", { name: "一句话自动连接", icon: "🏝️" })
+      ).id;
+      let child: ChildProcess | undefined;
+      try {
+        const pairing = await service.createPairing(user, bootstrapRoom);
+        const configFile = resolve(
+          bundleRoot,
+          ".data/connections/bootstrap/config.json",
+        );
+        const flags = [
+          "--non-interactive",
+          "--server",
+          url,
+          "--code",
+          pairing.code,
+          "--adapter",
+          "cli",
+          "--command",
+          process.execPath,
+          "--args",
+          JSON.stringify([resolve("tests/fixtures/local-agent.mjs")]),
+          "--workspace",
+          resolve(root, "automatic-workspace"),
+          "--config",
+          configFile,
+          "--name",
+          "自动连接设备",
+          "--agent-name",
+          "自动连接 Agent",
+        ];
+        const start = (args: string[]) => {
+          const process = spawn("bash", ["connect.sh", ...args], {
+            cwd: bundleRoot,
+            env: {
+              ...globalThis.process.env,
+              NODE_EXTRA_CA_CERTS: resolve(root, "cert.pem"),
+            },
+            stdio: ["ignore", "pipe", "pipe"],
+          });
+          bootstrapChildren.push(process);
+          process.stdout.on("data", (b) => logs.push("Bootstrap: " + b));
+          process.stderr.on("data", (b) => logs.push("Bootstrap: " + b));
+          return process;
+        };
+        child = start(flags);
+        await waitFor(
+          async () =>
+            (await service.state(user, bootstrapRoom)).seats[0]?.last_seen_at,
+          "无交互配对及连接",
+        );
+        const config = JSON.parse(await readFile(configFile, "utf8"));
+        expect(config.allow_development).toBe(false);
+        expect(config.room_id).toBe(bootstrapRoom);
+        expect(config.token).toBeTruthy();
+        expect((await service.state(user, bootstrapRoom)).seats[0].state).toBe(
+          "pending",
+        );
+        const firstSession = (
+          await pool.query("select session_id from agent_nodes where id=$1", [
+            config.node_id,
+          ])
+        ).rows[0].session_id;
+        child.kill("SIGTERM");
+        await once(child, "exit");
+        child = start(["--config", configFile]);
+        await waitFor(async () => {
+          const node = (
+            await pool.query("select session_id from agent_nodes where id=$1", [
+              config.node_id,
+            ])
+          ).rows[0];
+          return node.session_id && node.session_id !== firstSession;
+        }, "复用已配对配置重连");
+        expect(JSON.parse(await readFile(configFile, "utf8")).token).toBe(
+          config.token,
+        );
+        expect((await service.state(user, bootstrapRoom)).seats).toHaveLength(
+          1,
+        );
+      } finally {
+        if (child && child.exitCode === null && child.signalCode === null) {
+          child.kill("SIGTERM");
+          await once(child, "exit");
+        }
+        await pool.query("delete from rooms where id=$1", [bootstrapRoom]);
+      }
     }, 60000);
     it("两个本地程序通过一次性配对和人类审批连接同一房间，断线自动重连而不重复回复", async () => {
       for (let i = 0; i < 2; i++) {

@@ -61,7 +61,13 @@ test("人类在联机席位审批两个真实 Node、选主持、确认文档、
     expect((await readArchive(await bundle.body())).has("connect.cmd")).toBe(
       true,
     );
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     for (let i = 0; i < 2; i++) {
+      const development = panel.getByLabel(
+        "允许此 Agent 在本机专用工作目录内开发（仍需批准聊天室任务）",
+      );
+      if (i) await development.check();
+      else await expect(development).not.toBeChecked();
       const [pairResponse] = await Promise.all([
         page.waitForResponse(
           (response) =>
@@ -69,7 +75,7 @@ test("人类在联机席位审批两个真实 Node、选主持、确认文档、
             response.request().method() === "POST",
         ),
         page
-          .getByRole("button", { name: "生成设备配对码", exact: true })
+          .getByRole("button", { name: "复制一键连接提示词", exact: true })
           .click(),
       ]);
       await expect(panel.locator(".connection-pair-code code")).toHaveText(
@@ -78,6 +84,16 @@ test("人类在联机席位审批两个真实 Node、选主持、确认文档、
       const code = (await panel
         .locator(".connection-pair-code code")
         .textContent())!;
+      const prompt = await panel
+        .getByLabel("一键连接提示词", { exact: true })
+        .inputValue();
+      expect(prompt).toContain(`${baseURL}/api/agent-node/client`);
+      expect(prompt).toContain(code);
+      expect(prompt).toContain("--non-interactive");
+      expect(prompt).toContain(i ? "--allow-development" : "--no-development");
+      await expect
+        .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+        .toBe(prompt);
       const response = await context.request.post("/api/agent-node/pair", {
         data: {
           code,
@@ -89,6 +105,11 @@ test("人类在联机席位审批两个真实 Node、选主持、确认文档、
         },
       });
       expect(response.status()).toBe(200);
+      // 无浏览器会话的设备也能下载；配对后相同码不能继续下载。
+      const consumed = await context.request.post("/api/agent-node/client", {
+        data: { code },
+      });
+      expect(consumed.status()).toBe(403);
       const node = await response.json(),
         name = i ? "开发 Agent" : "主持 Agent";
       await page.getByRole("button", { name: "刷新联机席位" }).click();
