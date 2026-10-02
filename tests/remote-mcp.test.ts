@@ -178,6 +178,82 @@ afterAll(async () => {
   if (root) await rm(root, { recursive: true, force: true });
 });
 describe.sequential("通用远程 MCP 的真实 HTTP 协议、身份与最终业务状态", () => {
+  it("用户级 WS 设备从大厅加入房间并切换，自动重连复用身份且游标按房间隔离", async () => {
+    const service = gateway.service,
+      p = await service.createPairing(users[0]);
+    const identity = await service.pair({
+      code: p.code,
+      node_name: "私有设备",
+      agent_name: "跨房间节点",
+      adapter: "cli",
+      fingerprint: randomUUID(),
+      capabilities: { egress_v2: true },
+    });
+    const node = new IslandNode(
+      {
+        server: origin,
+        token: identity.token,
+        adapter: "cli",
+        command: process.execPath,
+        workspace: root,
+      },
+      {
+        configFile: resolve(root, randomUUID(), "config.json"),
+        logger: () => {},
+      },
+    );
+    const running = node.start();
+    async function until(check: () => boolean) {
+      for (let i = 0; i < 500 && !check(); i++)
+        await new Promise((r) => setTimeout(r, 20));
+      expect(check()).toBe(true);
+    }
+    try {
+      await until(
+        () =>
+          node.connectionStatus.state === "registered" &&
+          node.connectionStatus.connected,
+      );
+      const a = await service.addAgentToRoom(users[0], room, identity.node_id);
+      await service.seatAction(users[0], room, "approve", {
+        participant_id: a.participant_id,
+      });
+      await until(
+        () =>
+          node.connectionStatus.room_id === room &&
+          node.connectionStatus.state === "approved" &&
+          node.connectionStatus.connected,
+      );
+      const before = node.connectionStatus.session_id;
+      node.cursor = Number.MAX_SAFE_INTEGER;
+      const b = await service.addAgentToRoom(
+        users[0],
+        otherRoom,
+        identity.node_id,
+      );
+      await service.seatAction(users[0], otherRoom, "approve", {
+        participant_id: b.participant_id,
+      });
+      await service.selectAgentRoom(users[0], {
+        node_id: identity.node_id,
+        participant_id: b.participant_id,
+        fresh_context: true,
+      });
+      await until(
+        () =>
+          node.connectionStatus.room_id === otherRoom &&
+          node.connectionStatus.connected,
+      );
+      expect(node.stopped).toBe(false);
+      expect(node.connectionStatus.session_id).not.toBe(before);
+      expect(node.cursor).not.toBe(Number.MAX_SAFE_INTEGER);
+      expect(node.cursors[room]).toBe(Number.MAX_SAFE_INTEGER);
+      expect(node.config.token).toBe(identity.token);
+    } finally {
+      node.stop();
+      await running;
+    }
+  }, 25000);
   it("原 WS 客户端遇到 Gateway 遗留租约只等待一次，租约过期后恢复；新副本不抢占", async () => {
     const pairing = await gateway.service.createPairing(users[0], room);
     const wire = await gateway.service.pair({
@@ -305,9 +381,25 @@ describe.sequential("通用远程 MCP 的真实 HTTP 协议、身份与最终业
         delivery_id: first.task.delivery_id,
         result: { message: "由当前 Agent 原生回传" },
       };
-      expect((await call(client, "island_complete_task", result)).ok).toBe(
-        true,
-      );
+      const staged = await call(client, "island_complete_task", result);
+      expect(staged).toMatchObject({ ok: true, pending_review: true });
+      expect(
+        (
+          await pool.query(
+            "select 1 from messages where sender_participant_id=$1 and content=$2",
+            [node.participant_id, result.result.message],
+          )
+        ).rowCount,
+      ).toBe(0);
+      const owner = (
+        await pool.query("select owner_user_id from agent_nodes where id=$1", [
+          node.node_id,
+        ])
+      ).rows[0].owner_user_id;
+      await gateway.service.reviewPrivate(owner, {
+        id: staged.review_id,
+        approve: true,
+      });
       expect(
         (await call(client, "island_complete_task", result)).duplicate,
       ).toBe(true);

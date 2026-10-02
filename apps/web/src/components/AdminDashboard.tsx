@@ -33,6 +33,7 @@ import { api, ApiError, size } from "@/lib/client";
 import { permissions, type AdminRole } from "@/lib/admin-policy";
 import { SiteBrand } from "./SiteProvider";
 import "./admin.css";
+import AgentPolicyPanel from "./AgentPolicyPanel";
 type Row = Record<string, any>;
 type AdminUser = {
   id: string;
@@ -480,7 +481,7 @@ export default function AdminDashboard({
           title: "房间 / 所属成员",
           render: (r) => (
             <div>
-              {r.room_name}
+              {r.room_name || "尚未加入房间"}
               <small>{r.owner_name}</small>
             </div>
           ),
@@ -494,7 +495,9 @@ export default function AdminDashboard({
                 : "已批准"
               : r.state === "pending"
                 ? "待批准"
-                : "已撤销",
+                : r.state === "registered"
+                  ? "已登记"
+                  : "已撤销",
         },
         {
           title: "设备连接",
@@ -1098,6 +1101,7 @@ export default function AdminDashboard({
                     </div>
                   </Panel>
                 )}
+                {section === "agents" && <AgentPolicyPanel />}
                 {section === "operations" && (
                   <Operations data={data} role={role} act={act} />
                 )}

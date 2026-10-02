@@ -89,7 +89,11 @@ test.describe.serial("完整后台与现有聊天系统适配", () => {
     const fs = await import("node:fs/promises");
     const path = await import("node:path");
     for (const o of objects)
-      await fs.unlink(path.resolve(".data/files", o.name)).catch(() => {});
+      await fs
+        .unlink(
+          path.resolve(process.env.E2E_STORAGE_DIR || ".data/files", o.name),
+        )
+        .catch(() => {});
     await pool.query("delete from announcements where title like $1", [
       "后台验收%",
     ]);
@@ -672,9 +676,15 @@ test.describe.serial("完整后台与现有聊天系统适配", () => {
       path = await import("node:path");
     const oldPath = `${room}/${randomUUID()}`,
       recentPath = `${room}/${randomUUID()}`;
-    await fs.mkdir(path.resolve(".data/files", room), { recursive: true });
+    await fs.mkdir(
+      path.resolve(process.env.E2E_STORAGE_DIR || ".data/files", room),
+      { recursive: true },
+    );
     for (const name of [oldPath, recentPath]) {
-      await fs.writeFile(path.resolve(".data/files", name), "孤立对象清理验收");
+      await fs.writeFile(
+        path.resolve(process.env.E2E_STORAGE_DIR || ".data/files", name),
+        "孤立对象清理验收",
+      );
       await pool.query(
         "insert into storage.objects(bucket_id,name,metadata) values('room-files',$1,'{}')",
         [name],
@@ -709,7 +719,9 @@ test.describe.serial("完整后台与现有聊天系统适配", () => {
       ).rowCount,
     ).toBe(0);
     await expect(
-      fs.access(path.resolve(".data/files", oldPath)),
+      fs.access(
+        path.resolve(process.env.E2E_STORAGE_DIR || ".data/files", oldPath),
+      ),
     ).rejects.toThrow();
     expect(
       (

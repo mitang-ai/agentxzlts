@@ -101,7 +101,7 @@ test("多用户/多标签页在线、输入 @ 提及人与 Agent、邀请码单�
       .toBe(true);
 
     await page.getByRole("button", { name: "联机席位", exact: true }).click();
-    const panel = page.getByRole("region", { name: "联机席位与 Agent 协作" });
+    const panel = page.getByRole("region", { name: "联机席位" });
     const paired = await post(context, `/api/rooms/${room}/agents/pairing`, {});
     const agent = await post(context, "/api/agent-node/pair", {
       code: paired.code,
@@ -172,50 +172,52 @@ test("多用户/多标签页在线、输入 @ 提及人与 Agent、邀请码单�
       })
       .toBe(false);
 
-    await page.getByRole("button", { name: "联机席位", exact: true }).click();
+    await page.getByRole("button", { name: "我的 Agent", exact: true }).click();
+    const invites = page.getByRole("region", { name: "我的连接邀请" });
+    const pending = invites.locator('.agent-invite[data-status="pending"]');
     const codes: any[] = [];
     for (let i = 0; i < 5; i++) {
       const wait = page.waitForResponse(
         (r) =>
-          r.url().endsWith(`/api/rooms/${room}/agents/pairing`) &&
+          r.url().endsWith("/api/my-agents/pairing") &&
           r.request().method() === "POST",
       );
-      await panel
-        .getByRole("button", { name: "复制一键连接提示词", exact: true })
+      await page
+        .getByRole("button", { name: "复制新 Agent 连接提示词", exact: true })
         .click();
       codes.push(await (await wait).json());
-      await expect(panel.locator(".connection-invitation")).toHaveCount(i + 1);
+      await expect(pending).toHaveCount(i + 1);
     }
-    await panel
-      .getByRole("button", { name: "复制一键连接提示词", exact: true })
+    await page
+      .getByRole("button", { name: "复制新 Agent 连接提示词", exact: true })
       .click();
     await expect(
-      panel.getByText("未使用的配对码过多，请撤销旧码后再试。", {
-        exact: true,
-      }),
+      page.getByText("未使用的配对码过多，请撤销旧码后再试。", { exact: true }),
     ).toBeVisible();
     page.on("dialog", (d) => d.accept());
-    await panel
-      .getByRole("button", { name: `删除邀请码 ${codes[0].id}`, exact: true })
+    await invites
+      .getByLabel("连接邀请 " + codes[0].id, { exact: true })
+      .getByRole("button", { name: "删除记录", exact: true })
       .click();
-    await expect(panel.locator(".connection-invitation")).toHaveCount(4);
-    const denied = await context.request.post("/api/agent-node/client", {
-      headers: { origin, "x-island-request": "1" },
-      data: { code: codes[0].code },
-    });
-    expect(denied.status()).toBe(403);
-    await panel
-      .getByRole("button", { name: "复制一键连接提示词", exact: true })
+    await expect(pending).toHaveCount(4);
+    expect(
+      (
+        await context.request.post("/api/agent-node/client", {
+          data: { code: codes[0].code },
+        })
+      ).status(),
+    ).toBe(403);
+    await page
+      .getByRole("button", { name: "复制新 Agent 连接提示词", exact: true })
       .click();
-    await expect(panel.locator(".connection-invitation")).toHaveCount(5);
+    await expect(pending).toHaveCount(5);
     await page.reload();
-    await page.getByRole("button", { name: /在线与提及验收/ }).click();
-    await page.getByRole("button", { name: "联机席位", exact: true }).click();
-    await expect(panel.locator(".connection-invitation")).toHaveCount(5);
-    await panel
+    await page.getByRole("button", { name: "我的 Agent", exact: true }).click();
+    await expect(pending).toHaveCount(5);
+    await invites
       .getByRole("button", { name: "一键删除未使用邀请", exact: true })
       .click();
-    await expect(panel.getByText("暂无待连接邀请")).toBeVisible();
+    await expect(pending).toHaveCount(0);
     expect(
       (
         await (await context.request.get(`/api/rooms/${room}/agents`)).json()
@@ -223,7 +225,7 @@ test("多用户/多标签页在线、输入 @ 提及人与 Agent、邀请码单�
     ).toContain(agent.participant_id);
     await page.setViewportSize({ width: 390, height: 844 });
     expect(
-      await panel.evaluate((e) => e.scrollWidth <= e.clientWidth + 1),
+      await invites.evaluate((e) => e.scrollWidth <= e.clientWidth + 1),
     ).toBe(true);
     await page.screenshot({
       path: "test-results/chat-ux-mobile.png",

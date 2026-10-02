@@ -58,18 +58,32 @@ beforeAll(async () => {
 afterAll(async () => {
   await rm(root, { recursive: true, force: true });
 });
-it("ACP 真正初始化和执行 JSON-RPC，只返回一次结构化回应", async () => {
-  const adapter = new ACPAdapter({
-    command: process.execPath,
-    args: [resolve("tests/fixtures/acp-agent.mjs")],
-    workspace: cwd,
-    agent_name: "验收",
-  });
-  expect((await adapter.discover())[0].name).toBe("本地 ACP 验收程序");
-  expect(
-    (await adapter.dispatch(job, { cwd, signal: new AbortController().signal }))
-      .message,
-  ).toContain("一次授权");
+it("ACP 初始化和执行 JSON-RPC，不继承桥接器秘密且只返回一次结构化回应", async () => {
+  const keys = ["ISLAND_TOKEN", "OPENAI_API_KEY", "AWS_SECRET_ACCESS_KEY"];
+  const original = keys.map((key) => process.env[key]);
+  keys.forEach((key) => (process.env[key] = "synthetic-environment-fixture"));
+  try {
+    const adapter = new ACPAdapter({
+      command: process.execPath,
+      args: [resolve("tests/fixtures/acp-agent.mjs"), "--verify-env"],
+      workspace: cwd,
+      agent_name: "验收",
+    });
+    expect((await adapter.discover())[0].name).toBe("本地 ACP 验收程序");
+    expect(
+      (
+        await adapter.dispatch(job, {
+          cwd,
+          signal: new AbortController().signal,
+        })
+      ).message,
+    ).toContain("一次授权");
+  } finally {
+    keys.forEach((key, i) => {
+      if (original[i] === undefined) delete process.env[key];
+      else process.env[key] = original[i];
+    });
+  }
 });
 it("ACP 不能借符号链接读取授权目录外的文件，讨论任务不能写文件", async () => {
   for (const mode of ["--symlink", "--write-denied"]) {

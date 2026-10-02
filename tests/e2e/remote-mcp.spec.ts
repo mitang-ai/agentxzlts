@@ -62,7 +62,7 @@ test("浏览器生成专属远程配置，跨用户查看席位，真实 MCP HTT
     await page.goto("/");
     await page.getByRole("button", { name: /通用连接浏览器验收/ }).click();
     await page.getByRole("button", { name: "联机席位", exact: true }).click();
-    const panel = page.getByRole("region", { name: "联机席位与 Agent 协作" });
+    const panel = page.getByRole("region", { name: "联机席位" });
     await panel
       .getByText("WorkBuddy、豆包等：无需安装客户端连接讨论", { exact: true })
       .click();
@@ -175,10 +175,15 @@ test("浏览器生成专属远程配置，跨用户查看席位，真实 MCP HTT
     await page.getByRole("button", { name: "发送消息", exact: true }).click();
     const delivery = (await waiting).task;
     expect(delivery.kind).toBe("mention");
-    await tool("island_complete_task", {
+    const staged = await tool("island_complete_task", {
       connection_id: conn.connection_id,
       delivery_id: delivery.delivery_id,
       result: { message: "独立远程通道回传成功（协议验收）" },
+    });
+    expect(staged.pending_review).toBe(true);
+    await post(context, "/api/my-agents/review", {
+      id: staged.review_id,
+      approve: true,
     });
     await expect(
       page

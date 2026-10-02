@@ -1,5 +1,10 @@
 import WebSocket from "ws";
 import {
+  safeResult,
+  artifactFindings,
+  privateFile,
+} from "../../agents/privacy.mjs";
+import {
   mkdir,
   writeFile,
   readFile,
@@ -27,6 +32,7 @@ import { readJSON, writeJSON, serverURL } from "./io.mjs";
 import { acquireInstance } from "./instances.mjs";
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const ignored = (path) =>
+  privateFile(path) ||
   path
     .split("/")
     .some(
@@ -83,6 +89,7 @@ export class IslandNode {
     this.stopped = false;
     this.active = null;
     this.cursor = 0;
+    this.cursors = {};
     this.retry = 500;
     this.privateDir = resolve(
       dirname(configFile),
@@ -149,11 +156,13 @@ export class IslandNode {
         before.muted !== this.connectionStatus.muted)
     ) {
       this.log(
-        this.connectionStatus.state === "pending"
-          ? "设备已连接，等待人类房间管理者批准席位。"
-          : this.connectionStatus.muted
-            ? "联机席位已批准，但已静音，等待管理者解除静音。"
-            : "联机席位已批准，等待点名或任务；本机开发仍须任务批准。",
+        this.connectionStatus.state === "registered"
+          ? "设备已登记到协作岛，请在“我的 Agent”添加到房间。"
+          : this.connectionStatus.state === "pending"
+            ? "设备已连接，等待人类房间管理者批准席位。"
+            : this.connectionStatus.muted
+              ? "联机席位已批准，但已静音，等待管理者解除静音。"
+              : "联机席位已批准，等待点名或任务；本机开发仍须任务批准。",
       );
     }
     const snapshot = { ...this.connectionStatus };
@@ -186,6 +195,7 @@ export class IslandNode {
       cursor: 0,
     });
     this.cursor = Number.isSafeInteger(cursor.cursor) ? cursor.cursor : 0;
+    this.cursors = cursor.rooms || {};
     this.savedCursor = this.cursor;
     let record = await readJSON(this.spool);
     if (!record && this.config.participant_id) {
@@ -247,6 +257,7 @@ export class IslandNode {
           if (packet.type === "error") {
             const e = Error(packet.data.error);
             e.status = packet.data.status;
+            e.code = packet.data.code;
             waiter.no(e);
           } else waiter.yes(packet.data);
         }
@@ -255,6 +266,12 @@ export class IslandNode {
           this.hasConnected = true;
           this.leaseConflictRetried = false;
           this.retry = 500;
+          const oldRoom = this.connectionStatus.room_id;
+          if (oldRoom !== packet.data.room_id) {
+            if (oldRoom) this.cursors[oldRoom] = this.cursor;
+            this.cursor = Number(this.cursors[packet.data.room_id] || 0);
+            this.savedCursor = -1;
+          }
           void this.updateStatus({ ...packet.data, connected: true }).catch(
             () => this.log("本机连接状态暂时无法保存。"),
           );
@@ -283,7 +300,8 @@ export class IslandNode {
           }
         } else if (packet.type === "error" && !waiter) {
           this.log(packet.data.error);
-          if ([401, 403].includes(packet.data.status)) this.stop();
+          if (packet.data.code === "CONNECTION_REPLACED") ws.close();
+          else if ([401, 403].includes(packet.data.status)) this.stop();
         }
       });
       ws.on("unexpected-response", (request, response) => {
@@ -355,6 +373,10 @@ export class IslandNode {
       if (this.cursor !== this.savedCursor) {
         await writeJSON(resolve(this.privateDir, "cursor.json"), {
           cursor: this.cursor,
+          rooms: {
+            ...this.cursors,
+            [this.connectionStatus.room_id]: this.cursor,
+          },
         });
         this.savedCursor = this.cursor;
       }
@@ -371,13 +393,17 @@ export class IslandNode {
       }
       if (this.active?.result) {
         const active = this.active;
-        await this.rpc("complete", {
+        const publication = await this.rpc("complete", {
           id: active.job.id,
           lease: active.job.lease,
           result: active.result,
         });
-        this.adapter.confirmed?.(active.job.id);
-        this.log("本轮结果已确认回传，Agent 返回等待。");
+        this.adapter.confirmed?.(active.job.id, publication);
+        this.log(
+          publication.pending_review
+            ? "结果已提交本人审核，尚未公开到聊天室。"
+            : "本轮结果已确认回传，Agent 返回等待。",
+        );
         this.active = null;
         await unlink(this.spool).catch(() => {});
       } else if (this.active && !this.executing) {
@@ -400,7 +426,8 @@ export class IslandNode {
         this.controller?.abort();
         this.active = null;
         await unlink(this.spool).catch(() => {});
-      } else if ([401, 403].includes(e.status)) this.stop();
+      } else if (e.code === "CONNECTION_REPLACED") this.ws?.close();
+      else if ([401, 403].includes(e.status)) this.stop();
       else if (e.status === 409 && this.active) {
         this.adapter.rejectReceipt?.(this.active.job.id, e);
         this.controller?.abort();
@@ -532,7 +559,9 @@ export class IslandNode {
           session_id: local.local_session_id,
         });
       delete local.local_session_id;
-      const result = turnResultSchema.parse(local);
+      const result = turnResultSchema.parse(
+        safeResult(local, [directory, this.config.workspace]),
+      );
       if (job.kind === "develop") {
         const checks = [];
         for (const check of this.config.checks || []) {
@@ -562,7 +591,7 @@ export class IslandNode {
             status: "not_run",
             output: "设备所有者未配置本地验证命令。",
           });
-        result.checks = checks;
+        result.checks = safeResult(checks, [directory, this.config.workspace]);
         const current = await walkWorkspace(directory),
           bytes = await packArtifact(
             base,
@@ -571,10 +600,43 @@ export class IslandNode {
               brief_hash: job.brief.content_hash,
               task_id: job.task_id,
               summary: result.summary,
-              checks,
+              checks: result.checks,
             },
             job.input.paths,
           );
+        const archive = await readArchive(bytes);
+        if (artifactFindings(archive).length)
+          throw Error(
+            "本地发送护栏发现成果含有隐私或凭据；文件正文未上传，请本人在本机检查。",
+          );
+        // Consent is bound to exact bytes, not a generic room/development authorization.
+        const proposal = {
+          sha256: digest(bytes),
+          size: bytes.length,
+          paths: JSON.parse(
+            archive.get("island-artifact.json").toString(),
+          ).changes.map((c) => c.path),
+        };
+        await writeFile(
+          resolve(this.privateDir, job.id + "-pending-artifact.zip"),
+          bytes,
+          { mode: 0o600 },
+        );
+        await this.rpc("artifact-proposal", { id: job.id, lease, proposal });
+        this.log(
+          "成果保留在本机，等待本人在“我的 Agent”确认指定文件清单和摘要。",
+        );
+        while (!controller.signal.aborted) {
+          const permit = await this.rpc("artifact-permit", {
+            id: job.id,
+            lease,
+          });
+          if (permit.status === "approved") break;
+          if (permit.status === "rejected") throw Error("本人拒绝了成果发送。");
+          await wait(2000);
+        }
+        if (controller.signal.aborted)
+          throw Error("成果发送等待已取消或超时。");
         const response = await this.request("/api/agent-node/artifacts", {
           method: "POST",
           headers: {

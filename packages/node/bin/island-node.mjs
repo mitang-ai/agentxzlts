@@ -216,6 +216,7 @@ async function pair(config) {
       adapter: config.adapter,
       fingerprint: config.fingerprint,
       capabilities: {
+        egress_v2: true,
         development: config.allow_development,
         workspace: !!config.workspace,
         ...(config.host_name ? { host_name: config.host_name } : {}),

@@ -125,6 +125,21 @@ async function waitFor(
 ) {
   const until = Date.now() + timeout;
   while (Date.now() < until) {
+    // The fixture owner explicitly approves each staged reply/file, just as the web UI.
+    // Production has no automatic reviewer.
+    const pending = (await service.myAgents(user)).reviews;
+    for (const review of pending) {
+      if (review.kind === "result")
+        expect(
+          (
+            await pool.query(
+              "select 1 from messages where client_message_id=$1",
+              [review.turn_id],
+            )
+          ).rowCount,
+        ).toBe(0);
+      await service.reviewPrivate(user, { id: review.id, approve: true });
+    }
     const value = await check();
     if (value) return value;
     await new Promise((r) => setTimeout(r, 100));
@@ -1141,6 +1156,20 @@ it("WorkBuddy/Hermes 宿主经真实 MCP+WSS 各自处理点名，撤销只停�
         result,
       }),
     ).toMatchObject({ confirmed: true });
+    const review = (await service.myAgents(user)).reviews.find(
+      (v: any) => v.turn_id === task.task_id,
+    );
+    expect(review).toBeTruthy();
+    expect(
+      (
+        await pool.query(
+          "select 1 from messages where content=$1 and room_id=$2",
+          [result.message, room],
+        )
+      ).rowCount,
+    ).toBe(0);
+    await service.reviewPrivate(user, { id: review.id, approve: true });
+
     await peers[0].tool("island_complete_task", {
       task_id: task.task_id,
       delivery_id: task.delivery_id,

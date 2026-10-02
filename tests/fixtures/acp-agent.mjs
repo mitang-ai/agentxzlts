@@ -1,4 +1,11 @@
 import { createInterface } from "node:readline";
+if (
+  process.argv.includes("--verify-env") &&
+  ["ISLAND_TOKEN", "OPENAI_API_KEY", "AWS_SECRET_ACCESS_KEY"].some(
+    (key) => process.env[key],
+  )
+)
+  process.exit(23);
 const lines = createInterface({ input: process.stdin });
 const send = (packet) =>
   process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...packet }) + "\n");

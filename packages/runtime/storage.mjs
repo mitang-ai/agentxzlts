@@ -20,6 +20,7 @@ export function createStorage(pool, env = process.env) {
     return resolve(root(), path);
   };
   return {
+    privacyRoot: resolve(root(), ".privacy"),
     async storeFile(path, bytes, type, db = pool) {
       const s = await client();
       if (s) {

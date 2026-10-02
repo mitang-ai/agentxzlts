@@ -96,7 +96,7 @@ export class HostAdapter {
       pending.signal.removeEventListener("abort", pending.abort);
       pending.resolve(result);
     }
-    if (receipt.confirmed) return { task_id: taskId, confirmed: true };
+    if (receipt.confirmed) return receipt.response;
     let timer;
     try {
       return await Promise.race([
@@ -112,11 +112,16 @@ export class HostAdapter {
       clearTimeout(timer);
     }
   }
-  confirmed(taskId) {
+  confirmed(taskId, publication = {}) {
     const receipt = this.receipts.get(taskId);
     if (receipt) {
       receipt.confirmed = true;
-      receipt.yes({ task_id: taskId, confirmed: true });
+      receipt.response = {
+        task_id: taskId,
+        confirmed: true,
+        pending_review: publication.pending_review === true,
+      };
+      receipt.yes(receipt.response);
     }
     // 有界保留成功回执以支持同一宿主重试，不重复发消息。
     if (this.receipts.size > 100)

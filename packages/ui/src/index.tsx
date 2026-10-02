@@ -37,7 +37,11 @@ export function ParticipantAvatar({
   };
   return (
     <span className="avatar" style={style}>
-      {src ? <img src={src} alt={name} /> : name.slice(0, 1)}
+      {src?.startsWith("/api/avatars/") ? (
+        <img src={src} alt={name} referrerPolicy="no-referrer" />
+      ) : (
+        name.slice(0, 1)
+      )}
       {online !== undefined && (
         <i className={online ? "presence online" : "presence"} />
       )}

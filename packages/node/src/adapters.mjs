@@ -1,3 +1,4 @@
+import { childEnvironment } from "../../agents/privacy.mjs";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { readFile, writeFile, mkdir, lstat } from "node:fs/promises";
@@ -22,7 +23,14 @@ export function parseResult(value) {
 export function runProcess(
   command,
   args,
-  { cwd, input = "", signal, timeout = 300000, env = process.env, onLine } = {},
+  {
+    cwd,
+    input = "",
+    signal,
+    timeout = 300000,
+    env = childEnvironment(),
+    onLine,
+  } = {},
 ) {
   // Windows npm 的 .cmd 包装不能由无 shell 的 spawn 直接执行。只解析标准 npm shim 的真实入口。
   if (process.platform === "win32") {
@@ -514,6 +522,7 @@ export class ACPAdapter {
     return new Promise((yes, no) => {
       const child = spawn(this.config.command, this.config.args || [], {
         cwd: this.config.workspace,
+        env: childEnvironment(),
         stdio: ["pipe", "pipe", "ignore"],
         windowsHide: true,
       });
@@ -576,6 +585,7 @@ export class ACPAdapter {
   async dispatch(job, { cwd, signal, documentPaths = [] }) {
     const child = spawn(this.config.command, this.config.args || [], {
       cwd,
+      env: childEnvironment(),
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });

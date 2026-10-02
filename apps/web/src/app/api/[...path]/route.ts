@@ -1,3 +1,4 @@
+import { uploadAvatar, readAvatar } from "@island/agents/avatars";
 import { NextRequest, NextResponse } from "next/server";
 import { repositoryRoot } from "@island/runtime";
 import { cookies } from "next/headers";
@@ -122,6 +123,23 @@ async function handle(
       if (req.headers.get("x-island-request") !== "1")
         throw new AppError(403, "请求校验失败");
     }
+    if (path[0] === "agent-enrollment" && !mutating) {
+      const token = path[2]?.replace(/\.md$/, "");
+      const markdown = await agents.readEnrollment(
+        uuid.parse(path[1]),
+        token,
+        process.env.APP_ORIGIN || req.nextUrl.origin,
+      );
+      return new Response(markdown, {
+        headers: {
+          "Content-Type": "text/markdown; charset=utf-8",
+          "Cache-Control": "private,no-store",
+          "X-Robots-Tag": "noindex,nofollow",
+          "Referrer-Policy": "no-referrer",
+          "X-Content-Type-Options": "nosniff",
+        },
+      });
+    }
     if (key === "site") {
       const after = z.coerce
         .number()
@@ -233,6 +251,89 @@ async function handle(
       return NextResponse.json({ user: await identity() });
     }
     const user = await identity();
+    if (path[0] === "my-agents") {
+      if (!mutating)
+        return NextResponse.json(
+          path[1] === "policy"
+            ? { policy: await agents.policy() }
+            : await agents.myAgents(user.id),
+          {
+            headers: { "Cache-Control": "private,no-store" },
+          },
+        );
+      const input = await jsonBody(req);
+      let result;
+      switch (path[1]) {
+        case "pairing":
+          result = await agents.createPairing(user.id, null, input);
+          break;
+        case "remote-connection":
+          result = await agents.createRemoteConnection(user.id, null, input);
+          break;
+        case "profile":
+          result = await agents.updateAgent(user.id, input);
+          break;
+        case "add-to-room":
+          result = await agents.addAgentToRoom(
+            user.id,
+            uuid.parse(input.room_id),
+            uuid.parse(input.node_id),
+          );
+          break;
+        case "select-room":
+          result = await agents.selectAgentRoom(user.id, input);
+          break;
+        case "revoke":
+          result = await agents.revokeMyAgent(
+            user.id,
+            uuid.parse(input.node_id),
+          );
+          break;
+        case "invitation":
+          result = await agents.invitationAction(user.id, input);
+          break;
+        case "review":
+          result = await agents.reviewPrivate(user.id, input);
+          break;
+        case "delete-pairings":
+          result = await agents.deletePairings(user.id, input);
+          break;
+        default:
+          throw new AppError(404, "操作不存在");
+      }
+      return NextResponse.json(result, {
+        headers: { "Cache-Control": "private,no-store" },
+      });
+    }
+    if (path[0] === "avatars") {
+      if (mutating) {
+        const bytes = await readBody(req, 2 * 1048576 + 65536);
+        const form = await new Request(req.url, {
+          method: "POST",
+          headers: { "Content-Type": req.headers.get("content-type") || "" },
+          body: new Uint8Array(bytes),
+        }).formData();
+        const file = form.get("file");
+        if (!(file instanceof File)) throw new AppError(400, "请选择头像图片");
+        return NextResponse.json(
+          await uploadAvatar(
+            agents,
+            user.id,
+            Buffer.from(await file.arrayBuffer()),
+          ),
+        );
+      }
+      return new Response(
+        new Uint8Array(await readAvatar(agents, user.id, uuid.parse(path[1]))),
+        {
+          headers: {
+            "Content-Type": "image/webp",
+            "Cache-Control": "private,no-store",
+            "X-Content-Type-Options": "nosniff",
+          },
+        },
+      );
+    }
     if (key === "auth/me") return NextResponse.json({ user });
     if (key !== "auth/logout") {
       const ops = (await settings()).operations;
@@ -326,13 +427,9 @@ async function handle(
       if (body.command === "profile") {
         z.object({
           display_name: z.string().trim().min(1).max(40),
-          avatar_url: z
-            .union([
-              z.literal(""),
-              z.url().refine((s) => s.startsWith("https://")),
-            ])
-            .optional(),
+          avatar_url: z.string().max(100).optional(),
         }).parse(body.data);
+        await agents.verifyAvatar(pool, user.id, body.data.avatar_url);
       }
       const cleanup =
         body.command === "delete_room"
@@ -392,7 +489,7 @@ async function handle(
         const action = path[3];
         let result;
         if (action === "pairing")
-          result = await agents.createPairing(user.id, roomId);
+          result = await agents.createPairing(user.id, roomId, input);
         else if (action === "remote-connection")
           result = await agents.createRemoteConnection(user.id, roomId, input);
         else if (action === "delete-pairings")
@@ -785,14 +882,15 @@ async function measured(
   const res = await handle(req, ctx);
   res.headers.set("X-Trace-ID", trace);
   const userId = (await identity().catch(() => null))?.id || null;
-  await recordMetric(
-    req,
-    res.status,
-    start,
-    trace,
-    userId,
-    Number(res.headers.get("content-length") || 0),
-  );
+  if (!req.nextUrl.pathname.startsWith("/api/agent-enrollment/"))
+    await recordMetric(
+      req,
+      res.status,
+      start,
+      trace,
+      userId,
+      Number(res.headers.get("content-length") || 0),
+    );
   return res;
 }
 export const GET = measured;

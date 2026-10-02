@@ -1,4 +1,5 @@
 export type Storage = {
+  privacyRoot: string;
   storeFile(path: string, bytes: Buffer, type: string, db?: any): Promise<void>;
   loadFile(path: string): Promise<Buffer>;
   removeFile(path: string, db?: any): Promise<void>;
