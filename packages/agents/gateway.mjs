@@ -2,6 +2,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { z } from "zod";
 import { isIP } from "node:net";
 import { AgentService } from "./service.mjs";
+import { createRemoteMcp } from "./remote-mcp.mjs";
 import { nodeClientBundle } from "./client-bundle.mjs";
 import { repositoryRoot } from "@island/runtime";
 import {
@@ -20,6 +21,7 @@ export function attachGateway(server, pool, storage, env = process.env) {
   const peers = new Map(),
     connecting = new Set(),
     rates = new Map();
+  const remoteMcp = createRemoteMcp(service);
   let sweeping = false;
   function sourceIP(req) {
     const forwarded =
@@ -64,9 +66,13 @@ export function attachGateway(server, pool, storage, env = process.env) {
   const drain = async (req, max) => {
     const chunks = [];
     let size = 0;
-    for await (const b of req) {
+    for await (const b of req.iterator({ destroyOnReturn: false })) {
       size += b.length;
-      if (size > max) throw new AgentError(413, "请求体超过限制。");
+      if (size > max) {
+        // 退出迭代不销毁 socket，客户端才能收到明确的 413；剩余数据不再缓冲。
+        req.resume();
+        throw new AgentError(413, "请求体超过限制。");
+      }
       chunks.push(b);
     }
     return Buffer.concat(chunks);
@@ -86,10 +92,23 @@ export function attachGateway(server, pool, storage, env = process.env) {
     } catch {
       return false;
     }
-    if (!path.startsWith("/api/agent-node/")) return false;
+    if (path !== "/mcp" && !path.startsWith("/api/agent-node/")) return false;
     try {
       if (!originAllowed(req)) throw new AgentError(403, "Node 请求来源无效。");
       await checkIP(sourceIP(req));
+      if (path === "/mcp") {
+        const allowedHost = new URL(env.APP_ORIGIN || "http://localhost").host;
+        if (req.headers.host !== allowedHost)
+          throw new AgentError(403, "MCP 请求主机无效。");
+        res.setHeader("cache-control", "no-store");
+        res.setHeader("x-content-type-options", "nosniff");
+        const parsedBody =
+          req.method === "POST"
+            ? JSON.parse((await drain(req, WIRE_MAX_BYTES)).toString())
+            : undefined;
+        await remoteMcp.handle(req, res, parsedBody);
+        return true;
+      }
       if (
         ["/api/agent-node/pair", "/api/agent-node/client"].includes(path) &&
         req.method === "POST"
@@ -250,6 +269,7 @@ export function attachGateway(server, pool, storage, env = process.env) {
                     connection.session_id,
                     peer.cursor,
                     peer.active,
+                    packet.data?.accepting,
                   );
                   peer.cursor = state.cursor;
                   send(ws, "sync", state, requestId);
@@ -320,7 +340,7 @@ export function attachGateway(server, pool, storage, env = process.env) {
       });
     } catch (e) {
       socket.write(
-        `HTTP/1.1 ${e.status || 503} ${e.status === 409 ? "Conflict" : e.status ? "Forbidden" : "Service Unavailable"}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`,
+        `HTTP/1.1 ${e.status || 503} ${e.status === 409 ? "Conflict" : e.status ? "Forbidden" : "Service Unavailable"}\r\n${e.retryAfter ? `Retry-After: ${e.retryAfter}\r\n` : ""}Connection: close\r\nContent-Length: 0\r\n\r\n`,
       );
       socket.destroy();
     } finally {
@@ -381,6 +401,7 @@ export function attachGateway(server, pool, storage, env = process.env) {
     async close() {
       clearInterval(heartbeat);
       clearInterval(maintenance);
+      await remoteMcp.close();
       for (const peer of peers.values()) {
         peer.ws.close(1001, "服务器关闭");
         setTimeout(() => peer.ws.terminate(), 1000).unref();

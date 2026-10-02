@@ -14,6 +14,7 @@ export async function nodeClientBundle(root) {
     "packages/node/bin/island-node.mjs",
     "packages/node/src/client.mjs",
     "packages/node/src/adapters.mjs",
+    "packages/node/src/workbuddy.mjs",
     "packages/node/src/host-adapter.mjs",
     "packages/node/src/host-mcp.mjs",
     "packages/node/src/io.mjs",

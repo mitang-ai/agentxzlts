@@ -315,6 +315,7 @@ describe.sequential("连接、记录清理与文件需求", () => {
   });
   it("实际客户端包的 shell 入口始终无 BOM 且使用 LF，不受 Windows 检出换行影响", async () => {
     const bundle = await readArchive(await nodeClientBundle(process.cwd()));
+    expect(bundle.has("packages/node/src/workbuddy.mjs")).toBe(true);
     expect(bundle.get("connect.sh").toString()).toMatch(
       /^#!\/usr\/bin\/env bash\n/,
     );

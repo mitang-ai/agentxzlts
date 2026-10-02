@@ -5,6 +5,37 @@
   padding: 28px 32px;
   color: var(--text);
 }
+.remote-connection {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  margin: 16px 0;
+}
+.remote-connection summary {
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+}
+.remote-connection label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+}
+.remote-connection select,
+.remote-connection input,
+.remote-connection textarea {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--surface, white);
+  color: var(--text);
+  max-width: 100%;
+}
+.remote-private-config textarea {
+  width: 100%;
+  box-sizing: border-box;
+}
 .connection-title,
 .collaboration-section > header {
   display: flex;

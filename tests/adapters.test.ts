@@ -14,6 +14,8 @@ import { once } from "node:events";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 // @ts-ignore
+import { workBuddyACP } from "../packages/node/src/workbuddy.mjs";
+// @ts-ignore
 import { IslandNode } from "../packages/node/src/client.mjs";
 // @ts-ignore
 import { writeArchive, treeHash } from "../packages/agents/archive.mjs";
@@ -86,6 +88,126 @@ it("ACP 不能借符号链接读取授权目录外的文件，讨论任务不能
     ).toContain("拒绝越权");
   }
   await expect(access(resolve(cwd, "new.txt"))).rejects.toThrow();
+});
+it("ACP 仅批准当前会话授权目录内的一次性读写，不再无条件取消所有编辑", async () => {
+  for (const mode of ["read", "edit"]) {
+    const adapter = new ACPAdapter({
+      command: process.execPath,
+      args: [resolve("tests/fixtures/acp-permissions.mjs"), mode],
+    });
+    const result = await adapter.dispatch(
+      {
+        ...job,
+        kind: mode === "edit" ? "develop" : "mention",
+        input: { ...job.input, paths: ["src"] },
+      },
+      { cwd },
+    );
+    expect(result.message).toContain(
+      mode === "edit" ? "一次性编辑成功" : "一次性读取成功",
+    );
+  }
+  expect(await readFile(resolve(cwd, "src/file.txt"), "utf8")).toBe(
+    "由当前 ACP 写入",
+  );
+});
+it.each(["outside", "execute", "empty", "wrong-session", "write-outside"])(
+  "ACP 拒绝错误会话、目录和执行权限 (%s)",
+  async (mode) => {
+    const adapter = new ACPAdapter({
+      command: process.execPath,
+      args: [resolve("tests/fixtures/acp-permissions.mjs"), mode],
+    });
+    expect(
+      (
+        await adapter.dispatch(
+          { ...job, kind: "develop", input: { ...job.input, paths: ["src"] } },
+          { cwd },
+        )
+      ).message,
+    ).toContain("拒绝");
+    await expect(access(resolve(cwd, "other.txt"))).rejects.toThrow();
+  },
+);
+it("WorkBuddy 自动定位只使用其自带 ACP 引擎，缺失时不回退，非 Windows 必须显式配置", async () => {
+  await expect(
+    workBuddyACP({ localAppData: root, platform: "win32" }),
+  ).rejects.toThrow("不会回退");
+  const path = resolve(
+    root,
+    "Programs/WorkBuddy/resources/app.asar.unpacked/cli/bin/codebuddy",
+  );
+  await mkdir(resolve(path, ".."), { recursive: true });
+  await writeFile(path, "fixture");
+  expect(await workBuddyACP({ localAppData: root, platform: "win32" })).toEqual(
+    {
+      command: process.execPath,
+      args: [path, "--acp"],
+      host_name: "WorkBuddy",
+    },
+  );
+  await expect(
+    workBuddyACP({ localAppData: root, platform: "linux" }),
+  ).rejects.toThrow("显式填写");
+});
+it("WorkBuddy 引擎标志和修改程序参数都不能复用其它 Agent 的已配对配置", async () => {
+  const file = resolve(root, "foreign-agent.json");
+  await writeFile(
+    file,
+    JSON.stringify({
+      token: randomUUID(),
+      adapter: "acp",
+      command: process.execPath,
+      args: ["hermes-fixture.mjs"],
+      host_name: "Hermes",
+      workspace: cwd,
+    }),
+  );
+  for (const flags of [
+    ["--workbuddy-engine"],
+    ["--args", JSON.stringify(["different-agent.mjs"])],
+  ]) {
+    await expect(
+      runProcess(
+        process.execPath,
+        [
+          resolve("packages/node/bin/island-node.mjs"),
+          "start",
+          "--config",
+          file,
+          ...flags,
+        ],
+        { cwd: process.cwd() },
+      ),
+    ).rejects.toThrow("本地命令执行失败");
+    expect(JSON.parse(await readFile(file, "utf8")).host_name).toBe("Hermes");
+  }
+});
+it("WorkBuddy 自带引擎不允许声明为 Hermes 等其他宿主", async () => {
+  const file = resolve(root, "invalid-workbuddy.json");
+  await expect(
+    runProcess(
+      process.execPath,
+      [
+        resolve("packages/node/bin/island-node.mjs"),
+        "init",
+        "--non-interactive",
+        "--server",
+        "http://localhost:3102",
+        "--adapter",
+        "acp",
+        "--workbuddy-engine",
+        "--host",
+        "Hermes",
+        "--workspace",
+        cwd,
+        "--config",
+        file,
+      ],
+      { cwd: process.cwd() },
+    ),
+  ).rejects.toThrow("本地命令执行失败");
+  await expect(access(file)).rejects.toThrow();
 });
 it("本机通用 HTTP Agent 接收任务协议；返回无效结构不能冒充成功", async () => {
   let received: any;

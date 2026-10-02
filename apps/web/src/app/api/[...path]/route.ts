@@ -393,6 +393,8 @@ async function handle(
         let result;
         if (action === "pairing")
           result = await agents.createPairing(user.id, roomId);
+        else if (action === "remote-connection")
+          result = await agents.createRemoteConnection(user.id, roomId, input);
         else if (action === "delete-pairings")
           result = await agents.deletePairings(user.id, input);
         else if (action === "revoke-pairing")
@@ -424,7 +426,9 @@ async function handle(
         else if (action === "merge")
           result = await agents.merge(user.id, roomId, input);
         else throw new AppError(400, "Agent 操作无效");
-        return NextResponse.json(result);
+        return NextResponse.json(result, {
+          headers: { "cache-control": "no-store" },
+        });
       }
       if (path[2] === "events") {
         const after = z.coerce

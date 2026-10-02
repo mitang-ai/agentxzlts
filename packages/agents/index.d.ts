@@ -5,6 +5,11 @@ export class AgentService {
   adminRevoke(adminId: string, nodeId: string, reason: string): Promise<any>;
   state(userId: string, roomId: string): Promise<any>;
   createPairing(userId: string, roomId: string): Promise<any>;
+  createRemoteConnection(
+    userId: string,
+    roomId: string,
+    input: any,
+  ): Promise<any>;
   deletePairings(userId: string, input: any): Promise<any>;
   revokePairing(
     userId: string,

@@ -25,6 +25,7 @@
     "service:install": "node scripts/service.mjs"
   },
   "devDependencies": {
+    "@modelcontextprotocol/client": "2.2.0",
     "@playwright/test": "^1.58.2",
     "@types/node": "^24.0.0",
     "@types/pg": "^8.23.1",

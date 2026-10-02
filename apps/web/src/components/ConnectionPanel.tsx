@@ -22,6 +22,7 @@ import { ParticipantAvatar } from "@island/ui";
 import type { RoomState } from "@island/protocol";
 import { api, size } from "@/lib/client";
 import "./connections.css";
+import RemoteConnection from "./RemoteConnection";
 type Row = Record<string, any>;
 function BriefFiles({
   title,
@@ -84,7 +85,7 @@ function connectionPrompt(origin: string, pairing: Row, development: boolean) {
     [
       `请在你所在的设备自动安装并连接协作岛房间`,
       `本次安装标识为 ${pairing.id}，以当前操作系统用户的主目录为基准，固定使用 .island-node/clients/${pairing.id} 作为专用安装目录，同一条提示词重复执行必须复用此目录、配置和身份，不能创建第二份安装或新的席位`,
-      `先确认接收此提示词的当前宿主产品，不能按本机安装的工具自动选择其它 Agent：Codex/Claude Code/OpenCode 仅能选择自己的 CLI；WorkBuddy 等支持 MCP 的 GUI Agent 必须选择 mcp 宿主直连；只有当前产品自己提供真实接口时才可选择 acp/cli/a2a/http，接口不明时停下报告，不允许回退到 Codex`,
+      `先确认接收此提示词的当前宿主产品，不能按本机安装的工具自动选择其它 Agent：Codex/Claude Code/OpenCode 仅能选择自己的 CLI；WorkBuddy、豆包等 GUI 的当前窗口接入选择 mcp 宿主直连。只有人类明确选择 WorkBuddy 自带独立 CodeBuddy 引擎时，才可用 --adapter acp --workbuddy-engine（独立任务会话，不是现有桌面对话）。其它产品只有提供自己的真实接口时才可选择 acp/cli/a2a/http，接口不明时停下报告，不允许回退到 Codex`,
       `首先检查此专用目录里的 ${JSON.stringify(`.data/connections/${pairing.id}/config.json`)}，在恢复前核对 adapter/host_name 是否确实对应当前宿主，旧配置指向其它 CLI 时必须停止本专用错误实例并报告需要新邀请重配，不得直接 start。若已正确配对，CLI 用已安装 Node.js 执行 packages/node/bin/island-node.mjs status --config 查看状态，已运行只报告现有连接，未运行用同一配置 start；mcp 模式则复用当前宿主已有的专用 mcpServers 配置，由该宿主启动 mcp 命令，不后台启动 start。不下载、不重装、不重新配对，配对码过期或已使用也不影响正确身份的恢复`,
       `仅在尚未安装时，向 ${origin}/api/agent-node/client 发送 POST 请求（Content-Type: application/json，请求体 ${JSON.stringify({ code: pairing.code })}）下载客户端 ZIP，无需网页登录，配对码只放请求体，解压到上述固定目录，已有运行中的安装不得覆盖`,
       `首次配置时在该目录运行 Windows 的 connect.cmd 或 Linux/macOS 的 bash connect.sh，启动程序会自动准备 Node.js 22+、npm 和客户端依赖`,
@@ -248,7 +249,11 @@ export default function ConnectionPanel({
     setError("");
     try {
       const form = new FormData();
-      form.append("file", file);
+      // Windows 的 ZIP MIME 可能是 application/x-zip-compressed，统一为受支持的标准类型。
+      form.append(
+        "file",
+        new File([file], file.name, { type: "application/zip" }),
+      );
       const result = await api<{ id: string }>(`rooms/${roomId}/files`, form);
       setBaseId(result.id);
       await onChanged();
@@ -435,6 +440,13 @@ export default function ConnectionPanel({
           )}
         </div>
       </div>
+      <RemoteConnection
+        key={roomId}
+        roomId={roomId}
+        disabled={busy || !state.capabilities?.agents}
+        refresh={refresh}
+        notify={notify}
+      />
       {pairing && (
         <div className="connection-pair-code">
           <div>
@@ -505,6 +517,28 @@ export default function ConnectionPanel({
           </div>
         ))}
       </section>
+      {data.pairings?.some((p: Row) => !p.used_at && !p.revoked_at) && (
+        <section
+          className="connection-invitations"
+          aria-label="房间成员的连接进度"
+        >
+          <strong>房间成员的连接进度</strong>
+          {data.pairings
+            .filter((p: Row) => !p.used_at && !p.revoked_at)
+            .map((p: Row) => (
+              <p key={p.id}>
+                {p.owner_name} ·{" "}
+                {p.download_started_at
+                  ? "已开始准备客户端（尚未连入）"
+                  : "已创建邀请，等待连接"}{" "}
+                · 邀请 {p.id.slice(0, 8)}
+              </p>
+            ))}
+          <small>
+            仅展示当前房间的有效邀请，不显示配对码。生成邀请或下载客户端不代表模型在线。
+          </small>
+        </section>
+      )}
       {manager && removableSeats.length > 0 && (
         <div className="connection-actions seat-cleanup">
           <span>已撤销或拒绝的记录：{removableSeats.length}</span>
@@ -528,10 +562,7 @@ export default function ConnectionPanel({
       {data.seats.length ? (
         <div className="connection-seats">
           {data.seats.map((s: Row) => {
-            const online =
-              s.state === "approved" &&
-              s.last_seen_at &&
-              Date.now() - new Date(s.last_seen_at).getTime() < 45000;
+            const online = s.is_connected === true;
             const host = s.participant_id === data.agent_host_participant_id;
             return (
               <article
@@ -556,7 +587,7 @@ export default function ConnectionPanel({
                     )}
                   </strong>
                   <small>
-                    {s.node_name} · {s.adapter}
+                    所属：{s.owner_name} · {s.node_name} · {s.adapter}
                     {s.capabilities?.host_name
                       ? `（${s.capabilities.host_name}）`
                       : ""}{" "}
@@ -572,9 +603,13 @@ export default function ConnectionPanel({
                           : s.muted
                             ? "已静音"
                             : !online
-                              ? "设备离线"
+                              ? s.capabilities.remote_mcp
+                                ? "助手未活动，需要用户唤醒"
+                                : "设备离线"
                               : s.activity === "idle"
-                                ? "已批准，等待点名或任务"
+                                ? s.model_ready
+                                  ? "模型正在等待任务"
+                                  : "客户端已连接，模型待唤醒"
                                 : turnNames[s.activity] || "在线"}
                   </span>
                 </div>

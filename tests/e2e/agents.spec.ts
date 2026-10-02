@@ -155,7 +155,7 @@ test("人类在联机席位审批两个真实 Node、选主持、确认文档、
       await expect(
         panel
           .getByLabel(name + " 的联机席位")
-          .getByText("已批准，等待点名或任务", { exact: true }),
+          .getByText("模型正在等待任务", { exact: true }),
       ).toBeVisible();
     }
     await page
