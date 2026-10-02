@@ -14,6 +14,7 @@ import {
   treeHash,
   safePath,
   mergeArtifacts,
+  unpackArtifact,
   digest,
 } from "../packages/agents/archive.mjs";
 import { createStorage } from "../packages/runtime/storage.mjs";
@@ -68,7 +69,32 @@ async function claim(n: any, c: any) {
   return service.claim(n.token, c.session_id);
 }
 async function complete(n: any, c: any, job: any, result: any) {
-  return service.complete(n.token, job.id, job.lease, result, c.session_id);
+  const response = await service.complete(
+    n.token,
+    job.id,
+    job.lease,
+    result,
+    c.session_id,
+  );
+  if (response.pending_review && response.review_id) {
+    expect(
+      (
+        await pool.query("select 1 from messages where client_message_id=$1", [
+          job.id,
+        ])
+      ).rowCount,
+    ).toBe(0);
+    const owner = (
+      await pool.query("select owner_user_id from agent_nodes where id=$1", [
+        n.node_id,
+      ])
+    ).rows[0].owner_user_id;
+    await service.reviewPrivate(owner, {
+      id: response.review_id,
+      approve: true,
+    });
+  }
+  return response;
 }
 beforeAll(async () => {
   root = await mkdtemp(resolve(tmpdir(), "island-agents-test-"));
@@ -432,6 +458,14 @@ describe.sequential("真实远端 Agent 权限、有界主持、需求对齐与�
         developWorker.lease,
         bad,
       ),
+    ).rejects.toThrow("所有者批准");
+    await expect(
+      unpackArtifact(
+        bad,
+        base,
+        { brief_hash: brief.content_hash, task_id: developWorker.task_id },
+        ["src/worker.js"],
+      ),
     ).rejects.toThrow("不一致");
     await expect(
       packArtifact(
@@ -447,6 +481,16 @@ describe.sequential("真实远端 Agent 权限、有界主持、需求对齐与�
       { brief_hash: brief.content_hash, task_id: developWorker.task_id },
       ["src/worker.js"],
     );
+    const permit = await service.proposeArtifact(
+      worker.token,
+      developWorker.id,
+      developWorker.lease,
+      { sha256: digest(bytes), size: bytes.length, paths: ["src/worker.js"] },
+    );
+    await service.reviewPrivate(users[1], {
+      id: permit.review_id,
+      approve: true,
+    });
     artifactWorker = await service.uploadArtifact(
       worker.token,
       developWorker.id,
@@ -475,6 +519,20 @@ describe.sequential("真实远端 Agent 权限、有界主持、需求对齐与�
       { brief_hash: brief.content_hash, task_id: developChair.task_id },
       ["src/host.js"],
     );
+    const hostPermit = await service.proposeArtifact(
+      chair.token,
+      developChair.id,
+      developChair.lease,
+      {
+        sha256: digest(hostBytes),
+        size: hostBytes.length,
+        paths: ["src/host.js"],
+      },
+    );
+    await service.reviewPrivate(users[0], {
+      id: hostPermit.review_id,
+      approve: true,
+    });
     artifactChair = await service.uploadArtifact(
       chair.token,
       developChair.id,

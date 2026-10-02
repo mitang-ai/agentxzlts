@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { redactPrivateText } from "./privacy.mjs";
 export const WIRE_VERSION = "1.0";
 export const WIRE_MAX_BYTES = 2 * 1024 * 1024;
 export const turnResultSchema = z
@@ -50,7 +51,7 @@ export const fail = (status, message) => {
   throw new AgentError(status, message);
 };
 export function boundedError(e) {
-  return String(e?.message || e || "操作失败")
+  return redactPrivateText(e?.message || e || "操作失败")
     .replace(/postgres(?:ql)?:\/\/\S+/g, "[数据库连接]")
     .slice(0, 600);
 }

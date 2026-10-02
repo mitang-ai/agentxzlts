@@ -109,6 +109,16 @@ async function handle(
       )
         throw new AppError(403, "请求来源无效");
     }
+    if (path[0] === "agents" && path[1] === "policy") {
+      return response(
+        NextResponse.json(
+          await agents.adminPolicy(
+            user.id,
+            isWrite ? await body(req) : undefined,
+          ),
+        ),
+      );
+    }
     if (path[0] === "agents" && path[1] === "revoke" && req.method === "POST") {
       const input = z
         .object({

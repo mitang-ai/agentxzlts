@@ -188,7 +188,7 @@ test("完整双账号协作：邀请、实时、重连、回复、任务、文�
     await pa.getByRole("button", { name: "提及成员" }).click();
     await pa
       .locator(".mention-picker")
-      .getByRole("button", { name: "小王" })
+      .getByRole("option", { name: /小王/ })
       .click();
     await pa.getByRole("textbox", { name: "消息", exact: true }).press("End");
     await pa

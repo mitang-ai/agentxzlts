@@ -2,12 +2,27 @@ import type { Pool } from "pg";
 import type { Storage } from "@island/runtime/storage";
 export class AgentService {
   constructor(pool: Pool, storage: Storage);
+  readEnrollment(id: string, token: string, origin: string): Promise<string>;
+  myAgents(userId: string): Promise<any>;
+  updateAgent(userId: string, input: any): Promise<any>;
+  addAgentToRoom(userId: string, roomId: string, nodeId: string): Promise<any>;
+  selectAgentRoom(userId: string, input: any): Promise<any>;
+  revokeMyAgent(userId: string, nodeId: string): Promise<any>;
+  invitationAction(userId: string, input: any): Promise<any>;
+  reviewPrivate(userId: string, input: any): Promise<any>;
+  policy(): Promise<any>;
+  verifyAvatar(db: any, userId: string, url: any): Promise<void>;
+  adminPolicy(userId: string, input?: any): Promise<any>;
   adminRevoke(adminId: string, nodeId: string, reason: string): Promise<any>;
   state(userId: string, roomId: string): Promise<any>;
-  createPairing(userId: string, roomId: string): Promise<any>;
+  createPairing(
+    userId: string,
+    roomId?: string | null,
+    input?: any,
+  ): Promise<any>;
   createRemoteConnection(
     userId: string,
-    roomId: string,
+    roomId: string | null,
     input: any,
   ): Promise<any>;
   deletePairings(userId: string, input: any): Promise<any>;

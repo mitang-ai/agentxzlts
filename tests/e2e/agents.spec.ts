@@ -23,6 +23,9 @@ test("人类在联机席位审批两个真实 Node、选主持、确认文档、
   const root = await mkdtemp(resolve(tmpdir(), "island-agents-browser-"));
   const children: ChildProcess[] = [];
   let room: string | undefined;
+  let reviewTimer: ReturnType<typeof setInterval> | undefined;
+  let reviewBusy = false;
+  const reviewErrors: string[] = [];
   try {
     await page.goto("/");
     await page.getByRole("button", { name: "注册", exact: true }).click();
@@ -52,7 +55,7 @@ test("人类在联机席位审批两个真实 Node、选主持、确认文档、
       )
     ).rows[0].id;
     await page.getByRole("button", { name: "联机席位", exact: true }).click();
-    const panel = page.getByRole("region", { name: "联机席位与 Agent 协作" });
+    let panel = page.getByRole("region", { name: "联机席位" });
     await expect(panel).toBeVisible();
     const bundle = await context.request.get(
       `/api/rooms/${room}/agents/client`,
@@ -66,12 +69,13 @@ test("人类在联机席位审批两个真实 Node、选主持、确认文档、
       const development = panel.getByLabel(
         "允许此 Agent 在本机专用工作目录内开发（仍需批准聊天室任务）",
       );
-      if (i) await development.check();
-      else await expect(development).not.toBeChecked();
+      if (!i) await expect(development).not.toBeChecked();
+      // Both fixture Agents later receive development tasks, so the owner grants both.
+      await development.check();
       const [pairResponse] = await Promise.all([
         page.waitForResponse(
           (response) =>
-            response.url().endsWith("/agents/pairing") &&
+            response.url().endsWith("/my-agents/pairing") &&
             response.request().method() === "POST",
         ),
         page
@@ -87,14 +91,15 @@ test("人类在联机席位审批两个真实 Node、选主持、确认文档、
       const prompt = await panel
         .getByLabel("一键连接提示词", { exact: true })
         .inputValue();
-      expect(prompt).toContain(`${baseURL}/api/agent-node/client`);
-      expect(prompt).toContain(code);
-      expect(prompt).toContain("--non-interactive");
-      expect(prompt).toContain(
-        "同一条提示词重复执行必须复用此目录、配置和身份",
-      );
-      expect(prompt).toContain("不下载、不重装、不重新配对");
-      expect(prompt).toContain(i ? "--allow-development" : "--no-development");
+      expect(prompt.length).toBeLessThan(220);
+      const documentURL = prompt.match(/https?:\/\/\S+/)![0];
+      const document = await context.request.get(documentURL);
+      expect(document.status()).toBe(200);
+      const instructions = await document.text();
+      expect(instructions).toContain(code);
+      expect(instructions).toContain("SHA-256");
+      expect(instructions).toContain("--non-interactive");
+      expect(instructions).toContain("--allow-development");
       await expect
         .poll(() => page.evaluate(() => navigator.clipboard.readText()))
         .toBe(prompt);
@@ -105,7 +110,7 @@ test("人类在联机席位审批两个真实 Node、选主持、确认文档、
           agent_name: i ? "开发 Agent" : "主持 Agent",
           adapter: "cli",
           fingerprint: randomUUID(),
-          capabilities: { development: true, workspace: true },
+          capabilities: { development: true, workspace: true, egress_v2: true },
         },
       });
       expect(response.status()).toBe(200);
@@ -116,6 +121,14 @@ test("人类在联机席位审批两个真实 Node、选主持、确认文档、
       expect(consumed.status()).toBe(403);
       const node = await response.json(),
         name = i ? "开发 Agent" : "主持 Agent";
+      const attached = await context.request.post(
+        "/api/my-agents/add-to-room",
+        {
+          headers: { origin: baseURL!, "x-island-request": "1" },
+          data: { node_id: node.node_id, room_id: room },
+        },
+      );
+      expect(attached.status()).toBe(200);
       await page.getByRole("button", { name: "刷新联机席位" }).click();
       await expect(
         page.getByRole("button", { name: "批准 " + name, exact: true }),
@@ -164,6 +177,28 @@ test("人类在联机席位审批两个真实 Node、选主持、确认文档、
     await expect(
       panel.getByText("Agent 主持人", { exact: true }),
     ).toBeVisible();
+    await page.getByRole("button", { name: "协作控制台", exact: true }).click();
+    panel = page.getByRole("region", { name: "房间协作控制台" });
+    // Fixture owner explicitly authorizes each private send; no platform bypass.
+    reviewTimer = setInterval(async () => {
+      if (reviewBusy) return;
+      reviewBusy = true;
+      try {
+        const data = await (await context.request.get("/api/my-agents")).json();
+        for (const review of data.reviews) {
+          const approved = await context.request.post("/api/my-agents/review", {
+            headers: { origin: baseURL!, "x-island-request": "1" },
+            data: { id: review.id, approve: true },
+          });
+          if (approved.status() !== 200)
+            reviewErrors.push(await approved.text());
+        }
+      } catch (error) {
+        reviewErrors.push(String(error));
+      } finally {
+        reviewBusy = false;
+      }
+    }, 200);
     const baseline = resolve(root, "baseline.zip");
     await writeFile(
       baseline,
@@ -250,6 +285,7 @@ test("人类在联机席位审批两个真实 Node、选主持、确认文档、
     expect(files.get("src/worker.js").toString()).toContain("=> 2");
     expect(files.get("src/host.js").toString()).toContain("=> 3");
     expect(files.get("README.md").toString()).toBe("共享源码基线\n");
+    expect(reviewErrors).toEqual([]);
     await mkdir("docs/agent-screenshots", { recursive: true });
     await page.screenshot({
       path: "docs/agent-screenshots/remote-development-desktop.png",
@@ -281,6 +317,8 @@ test("人类在联机席位审批两个真实 Node、选主持、确认文档、
       fullPage: true,
     });
   } finally {
+    if (reviewTimer) clearInterval(reviewTimer);
+    while (reviewBusy) await new Promise((r) => setTimeout(r, 50));
     for (const child of children) child.kill("SIGTERM");
     await new Promise((r) => setTimeout(r, 300));
     for (const child of children)

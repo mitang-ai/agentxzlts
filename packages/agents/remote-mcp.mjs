@@ -4,6 +4,7 @@ import { toNodeHandler } from "@modelcontextprotocol/node";
 import { z } from "zod";
 import { AgentError, turnResultSchema, WIRE_MAX_BYTES } from "./protocol.mjs";
 import { digest } from "./archive.mjs";
+import { redactPrivateText } from "./privacy.mjs";
 
 const connection = { connection_id: z.uuid() };
 const receipt = { ...connection, delivery_id: z.uuid() };
@@ -16,7 +17,7 @@ const publicSeat = (s) => ({
   participant_id: s.participant_id,
   display_name: s.display_name,
   owner_name: s.owner_name,
-  host_name: s.capabilities.host_name || s.adapter,
+  host_name: redactPrivateText(s.capabilities.host_name || s.adapter),
   state: s.state,
   muted: s.muted,
   connected: s.is_connected === true,
@@ -84,8 +85,8 @@ export class RemoteAgentSession {
       const seats = (
         await db.query(
           `select p.id participant_id,p.display_name,o.display_name owner_name,s.state,s.muted,n.capabilities,n.adapter,
-        (n.session_id is not null and n.last_seen_at>now()-interval '45 seconds' and n.revoked_at is null and n.expires_at>now()) is_connected,
-        coalesce(n.ready_until>now(),false) model_ready,
+        (n.session_id is not null and n.last_seen_at>now()-interval '45 seconds' and n.revoked_at is null and n.expires_at>now() and (not n.platform_scope or n.active_seat_id=s.participant_id)) is_connected,
+        (coalesce(n.ready_until>now(),false) and (not n.platform_scope or n.active_seat_id=s.participant_id)) model_ready,
         coalesce((select kind from agent_turns j where j.participant_id=p.id and status='leased'),'idle') activity
         from agent_seats s join participants p on p.id=s.participant_id join agent_nodes n on n.id=s.node_id
         join profiles o on o.id=n.owner_user_id where p.room_id=$1 and s.deleted_at is null order by s.created_at`,

@@ -44,6 +44,9 @@ import {
 import { useSite, SiteBrand, SiteFooter } from "@/components/SiteProvider";
 import { ParticipantAvatar } from "@island/ui";
 import ConnectionPanel from "./ConnectionPanel";
+import MyAgents from "./MyAgents";
+import AgentPreview from "./AgentPreview";
+import AvatarEditor from "./AvatarEditor";
 import {
   canManage,
   canUpdateTask,
@@ -274,11 +277,11 @@ export default function Island() {
   const [roomId, setRoomId] = useState<string | null>(null);
   const [state, setState] = useState<RoomState | null>(null);
   const [primary, setPrimary] = useState<
-    "chat" | "rooms" | "tasks" | "connections"
+    "chat" | "rooms" | "tasks" | "connections" | "my-agents" | "agent-preview"
   >("chat");
-  const [tab, setTab] = useState<"chat" | "tasks" | "files" | "connections">(
-    "chat",
-  );
+  const [tab, setTab] = useState<
+    "chat" | "tasks" | "files" | "connections" | "collaboration"
+  >("chat");
   const [modal, setModal] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
@@ -770,7 +773,7 @@ export default function Island() {
     );
   return (
     <div
-      className={`app ${roomId ? "room-open" : ""} ${primary === "tasks" ? "tasks-open" : ""}`}
+      className={`app ${roomId ? "room-open" : ""} ${["tasks", "my-agents", "agent-preview"].includes(primary) ? "tasks-open" : ""}`}
     >
       <aside className="rail">
         <SiteBrand rail />
@@ -779,7 +782,12 @@ export default function Island() {
             { key: "chat", label: "聊天", icon: <MessageCircle size={21} /> },
             { key: "rooms", label: "房间", icon: <House size={21} /> },
             { key: "tasks", label: "任务", icon: <ListTodo size={21} /> },
-            { key: "connections", label: "联机", icon: <Bot size={21} /> },
+            { key: "my-agents", label: "我的 Agent", icon: <Bot size={21} /> },
+            {
+              key: "agent-preview",
+              label: "自研 Agent",
+              icon: <Bot size={21} />,
+            },
           ]
             .filter(
               (n) =>
@@ -888,7 +896,11 @@ export default function Island() {
         </button>
       </aside>
       <main className="workspace">
-        {primary === "tasks" ? (
+        {primary === "my-agents" ? (
+          <MyAgents rooms={rooms} notify={notify} />
+        ) : primary === "agent-preview" ? (
+          <AgentPreview />
+        ) : primary === "tasks" ? (
           <>
             <header className="aggregate-header">
               <h1>我的任务</h1>
@@ -1036,13 +1048,14 @@ export default function Island() {
                   { key: "files", label: "文件" },
                   { key: "tasks", label: "任务" },
                   { key: "connections", label: "联机席位" },
+                  { key: "collaboration", label: "协作控制台" },
                 ]
                   .filter(
                     (t) =>
                       t.key === "chat" ||
                       (t.key === "tasks"
                         ? caps.tasks
-                        : t.key === "connections"
+                        : ["connections", "collaboration"].includes(t.key)
                           ? caps.agents && caps.connection_seat
                           : caps.uploads),
                   )
@@ -1066,9 +1079,11 @@ export default function Island() {
                       : "共同分享，随时找到"}
               </span>
             </div>
-            {tab === "connections" ? (
+            {["connections", "collaboration"].includes(tab) ? (
               <ConnectionPanel
-                key={roomId}
+                key={roomId + tab}
+                view={tab === "collaboration" ? "collaboration" : "seats"}
+                openMyAgents={() => setPrimary("my-agents")}
                 state={state}
                 notify={notify}
                 onChanged={async () => {
@@ -2456,8 +2471,12 @@ function ProfileDialog({
   onSave: (values: Record<string, unknown>) => Promise<void>;
   onLogout: () => Promise<void>;
 }) {
+  const [avatar, setAvatar] = useState<string | null>(
+    user.avatar_url?.startsWith("/api/avatars/") ? user.avatar_url : null,
+  );
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [avatarBusy, setAvatarBusy] = useState(false);
   return (
     <Modal title="个人资料" onClose={onClose}>
       <div className="profile-avatar">
@@ -2490,15 +2509,13 @@ function ProfileDialog({
             maxLength={40}
           />
         </label>
-        <label>
-          头像链接（可选）
-          <input
-            name="avatar_url"
-            type="url"
-            defaultValue={user.avatar_url || ""}
-            placeholder="https://…"
-          />
-        </label>
+        <AvatarEditor
+          value={avatar}
+          onChange={setAvatar}
+          name={user.display_name}
+          onBusyChange={setAvatarBusy}
+        />
+        <input type="hidden" name="avatar_url" value={avatar || ""} />
         <ErrorLine error={error} />
         <div className="modal-footer">
           <button
@@ -2509,7 +2526,7 @@ function ProfileDialog({
             <LogOut size={15} />
             退出登录
           </button>
-          <button className="primary" disabled={busy}>
+          <button className="primary" disabled={busy || avatarBusy}>
             保存资料
           </button>
         </div>

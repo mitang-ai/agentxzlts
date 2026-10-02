@@ -21,6 +21,7 @@ export async function nodeClientBundle(root) {
     "packages/node/src/instances.mjs",
     "packages/agents/archive.mjs",
     "packages/agents/protocol.mjs",
+    "packages/agents/privacy.mjs",
     "LICENSE",
     "NOTICE.md",
   ])

@@ -1,6 +1,15 @@
 import { randomUUID, randomBytes } from "node:crypto";
 import { z } from "zod";
 import {
+  PrivacyVault,
+  privacyFindings,
+  artifactFindings,
+  safeResult,
+} from "./privacy.mjs";
+import { registryMethods } from "./registry.mjs";
+import { nodeClientBundle } from "./client-bundle.mjs";
+import { repositoryRoot } from "@island/runtime";
+import {
   digest,
   readArchive,
   writeArchive,
@@ -23,6 +32,7 @@ export class AgentService {
   constructor(pool, storage) {
     this.pool = pool;
     this.storage = storage;
+    this.vault = new PrivacyVault(storage.privacyRoot);
   }
   async transaction(fn) {
     const db = await this.pool.connect();
@@ -85,10 +95,18 @@ export class AgentService {
       JSON.stringify(payload),
     ]);
   }
-  async createPairing(userId, roomId) {
+  async createPairing(userId, roomId = null, input = {}) {
+    const options = z
+      .object({ development: z.boolean().default(false) })
+      .parse(input);
+    const clientDigest = digest(await nodeClientBundle(repositoryRoot()));
     return this.transaction(async (db) => {
-      const { member } = await this.room(db, roomId, userId, { write: true });
+      const { member } = roomId
+        ? await this.room(db, roomId, userId, { write: true })
+        : { member: null };
+      await this.owner(db, userId);
       await this.enabled(db, userId, roomId);
+      const policy = await this.policy(db);
       // 配额是账号级的，不同房间同时生成也必须串行核验。
       await db.query("select pg_advisory_xact_lock(hashtextextended($1,0))", [
         `agent-pairings:${userId}`,
@@ -101,7 +119,7 @@ export class AgentService {
               [userId],
             )
           ).rows[0].n,
-        ) >= 5
+        ) >= policy.max_pending_invites
       )
         fail(429, "未使用的配对码过多，请撤销旧码后再试。");
       const code = secret(),
@@ -111,8 +129,28 @@ export class AgentService {
             [roomId, userId, digest(code)],
           )
         ).rows[0];
-      await this.emit(db, roomId, "agent.pairing.created", member.id, row.id);
-      return { ...row, code };
+      const docToken = secret();
+      await db
+        .query(
+          "update agent_pairings set code_cipher=$2,doc_token_hash=$3,doc_cipher=$4,development=$5,client_digest=$6,expires_at=now()+make_interval(mins=>$7) where id=$1 returning expires_at",
+          [
+            row.id,
+            await this.vault.seal(code, `invite:${row.id}`),
+            digest(docToken),
+            await this.vault.seal(docToken, `doc:${row.id}`),
+            options.development,
+            clientDigest,
+            policy.invite_minutes,
+          ],
+        )
+        .then((r) => (row.expires_at = r.rows[0].expires_at));
+      if (roomId)
+        await this.emit(db, roomId, "agent.pairing.created", member.id, row.id);
+      return {
+        ...row,
+        code,
+        document_path: `/api/agent-enrollment/${row.id}/${docToken}.md`,
+      };
     });
   }
   async pairingAccess(db, code) {
@@ -123,15 +161,13 @@ export class AgentService {
       ])
     ).rows[0];
     if (!pairing) fail(403, "配对码无效或已使用。");
-    const { room } = await this.room(
-      db,
-      pairing.room_id,
-      pairing.owner_user_id,
-      {
-        write: true,
-      },
-    );
-    await this.enabled(db, pairing.owner_user_id, room.id);
+    const { room } = pairing.room_id
+      ? await this.room(db, pairing.room_id, pairing.owner_user_id, {
+          write: true,
+        })
+      : { room: null };
+    await this.owner(db, pairing.owner_user_id);
+    await this.enabled(db, pairing.owner_user_id, room?.id || null);
     const locked = (
       await db.query("select * from agent_pairings where id=$1 for update", [
         pairing.id,
@@ -140,6 +176,7 @@ export class AgentService {
     if (
       !locked ||
       locked.used_at ||
+      locked.deleted_at ||
       locked.revoked_at ||
       new Date(locked.expires_at) <= new Date()
     )
@@ -147,12 +184,13 @@ export class AgentService {
     return { pairing: locked, room };
   }
   async authorizeClientDownload(code) {
-    await this.transaction(async (db) => {
+    return this.transaction(async (db) => {
       const { pairing } = await this.pairingAccess(db, code);
       await db.query(
         "update agent_pairings set download_started_at=now() where id=$1",
         [pairing.id],
       );
+      return pairing.client_digest;
     });
   }
   async pair(input) {
@@ -177,6 +215,7 @@ export class AgentService {
             development: z.boolean().default(false),
             workspace: z.boolean().default(false),
             host_name: z.string().trim().min(1).max(80).optional(),
+            egress_v2: z.boolean().default(false),
           })
           .default({ development: false, workspace: false }),
       })
@@ -198,7 +237,34 @@ export class AgentService {
     });
   }
   async pairInTransaction(db, data, token, pairing, room) {
+    await db.query("select pg_advisory_xact_lock(hashtextextended($1,0))", [
+      `agent-nodes:${pairing.owner_user_id}`,
+    ]);
+    const policy = await this.policy(db);
     if (
+      Number(
+        (
+          await db.query(
+            "select count(*) n from agent_nodes where owner_user_id=$1 and revoked_at is null and expires_at>now()",
+            [pairing.owner_user_id],
+          )
+        ).rows[0].n,
+      ) >= policy.max_agents
+    )
+      fail(429, "已达到账号的 Agent 数量上限。");
+    if (privacyFindings([data.agent_name, data.capabilities.host_name]).length)
+      fail(400, "Agent 昵称和宿主名称不能包含私有路径或凭据。");
+    // New account-level invites carry the owner's actual development consent.
+    // A connecting host cannot grant itself capabilities by changing its declaration.
+    if (!room)
+      data.capabilities = {
+        ...data.capabilities,
+        development:
+          pairing.development && data.capabilities.development === true,
+        workspace: pairing.development && data.capabilities.workspace === true,
+      };
+    if (
+      room &&
       Number(
         (
           await db.query(
@@ -223,34 +289,42 @@ export class AgentService {
         ],
       )
     ).rows[0];
-    const participant = (
+    await db.query("update agent_nodes set platform_scope=$2 where id=$1", [
+      node.id,
+      !room,
+    ]);
+    const participant = room
+      ? (
+          await db.query(
+            "insert into participants(room_id,type,display_name,status) values($1,'agent',$2,'left') returning id",
+            [room.id, data.agent_name],
+          )
+        ).rows[0]
+      : null;
+    if (participant)
       await db.query(
-        "insert into participants(room_id,type,display_name,status) values($1,'agent',$2,'left') returning id",
-        [room.id, data.agent_name],
-      )
-    ).rows[0];
+        "insert into agent_seats(participant_id,node_id) values($1,$2)",
+        [participant.id, node.id],
+      );
     await db.query(
-      "insert into agent_seats(participant_id,node_id) values($1,$2)",
-      [participant.id, node.id],
-    );
-    await db.query(
-      "update agent_pairings set used_at=now(),node_id=$2 where id=$1",
+      "update agent_pairings set used_at=now(),node_id=$2,code_cipher=null,doc_cipher=null where id=$1",
       [pairing.id, node.id],
     );
-    await this.emit(
-      db,
-      room.id,
-      "agent.pairing.requested",
-      null,
-      participant.id,
-    );
+    if (room)
+      await this.emit(
+        db,
+        room.id,
+        "agent.pairing.requested",
+        null,
+        participant.id,
+      );
     return {
       node_id: node.id,
       token,
       expires_at: node.expires_at,
-      participant_id: participant.id,
-      room_id: room.id,
-      state: "pending",
+      participant_id: participant?.id || null,
+      room_id: room?.id || null,
+      state: room ? "pending" : "registered",
     };
   }
   async createRemoteConnection(userId, roomId, input) {
@@ -259,13 +333,18 @@ export class AgentService {
       .strict()
       .parse(input);
     return this.transaction(async (db) => {
-      const { room } = await this.room(db, roomId, userId, { write: true });
+      const { room } = roomId
+        ? await this.room(db, roomId, userId, { write: true })
+        : { room: null };
+      await this.owner(db, userId);
       await this.enabled(db, userId, roomId);
+      if (!(await this.policy(db)).allow_remote_mcp)
+        fail(403, "平台暂时关闭远程 MCP 接入。");
       // 直接在网页登录授权下生成一次性展示的设备凭据；不把 token 交给 MCP 工具。
       const token = secret(),
         pairing = (
           await db.query(
-            "insert into agent_pairings(room_id,owner_user_id,code_hash) values($1,$2,$3) returning *",
+            "insert into agent_pairings(room_id,owner_user_id,code_hash,source) values($1,$2,$3,'remote_mcp') returning *",
             [roomId, userId, digest(secret())],
           )
         ).rows[0];
@@ -298,8 +377,12 @@ export class AgentService {
         [digest(token)],
       )
     ).rows[0];
-    if (!n || (sessionId && n.session_id !== sessionId))
-      fail(401, "Node 凭据已撤销、过期或连接已被替代。");
+    if (!n) fail(401, "Node 凭据已撤销或过期。");
+    if (sessionId && n.session_id !== sessionId) {
+      const e = new AgentError(401, "连接已被替代，请用原配置重连当前房间。");
+      e.code = "CONNECTION_REPLACED";
+      throw e;
+    }
     if (
       (await db.query("select effective_status($1) status", [n.owner_user_id]))
         .rows[0].status === "banned"
@@ -309,13 +392,27 @@ export class AgentService {
     return n;
   }
   async nodeSeat(db, n, { approved = true, write = false } = {}) {
+    if (n.capabilities.remote_mcp && !(await this.policy(db)).allow_remote_mcp)
+      fail(403, "平台已暂停远程 MCP 接入。");
     const seat = (
       await db.query(
-        "select s.*,p.room_id,p.display_name,p.status,p.last_read_event_id from agent_seats s join participants p on p.id=s.participant_id where s.node_id=$1",
-        [n.id],
+        "select s.*,p.room_id,p.display_name,p.status,p.last_read_event_id from agent_seats s join participants p on p.id=s.participant_id where s.node_id=$1 and (not $2 or s.participant_id=$3)",
+        [n.id, n.platform_scope, n.active_seat_id],
       )
     ).rows[0];
-    if (!seat) fail(403, "联机席位不存在。");
+    if (!seat) {
+      if (n.platform_scope && !n.active_seat_id && !approved) {
+        await this.enabled(db, n.owner_user_id, null);
+        return {
+          state: "registered",
+          room_id: null,
+          participant_id: null,
+          room: { id: null, name: "我的 Agent" },
+          muted: false,
+        };
+      }
+      fail(403, "联机席位不存在，请在“我的 Agent”选择已批准的房间。");
+    }
     const { room } = await this.room(db, seat.room_id, n.owner_user_id, {
       write,
     });
@@ -326,10 +423,17 @@ export class AgentService {
     if (
       !current ||
       current.revoked_at ||
-      new Date(current.expires_at) <= new Date() ||
-      (n.expected_session_id && current.session_id !== n.expected_session_id)
+      new Date(current.expires_at) <= new Date()
     )
       fail(401, "设备凭据或连接已失效。");
+    if (
+      (current.platform_scope && current.active_seat_id !== n.active_seat_id) ||
+      (n.expected_session_id && current.session_id !== n.expected_session_id)
+    ) {
+      const error = new AgentError(401, "房间或连接已切换，请重新连接。");
+      error.code = "CONNECTION_REPLACED";
+      throw error;
+    }
     if (
       approved &&
       (seat.state !== "approved" || seat.status !== "active" || seat.muted)
@@ -378,13 +482,14 @@ export class AgentService {
           "update participants set last_active_at=now() where id=$1",
           [s.participant_id],
         );
-      await this.emit(
-        db,
-        s.room_id,
-        "agent.connection.changed",
-        null,
-        s.participant_id,
-      );
+      if (s.room_id)
+        await this.emit(
+          db,
+          s.room_id,
+          "agent.connection.changed",
+          null,
+          s.participant_id,
+        );
       return {
         node_id: n.id,
         session_id: sessionId,
@@ -405,8 +510,8 @@ export class AgentService {
       if (!cleared.rowCount) return;
       const s = (
         await db.query(
-          "select p.id,p.room_id from agent_seats s join participants p on p.id=s.participant_id where node_id=$1",
-          [n.id],
+          "select p.id,p.room_id from agent_seats s join participants p on p.id=s.participant_id where node_id=$1 and (not $2 or s.participant_id=$3)",
+          [n.id, n.platform_scope, n.active_seat_id],
         )
       ).rows[0];
       if (s) {
@@ -423,10 +528,10 @@ export class AgentService {
       const { room, member } = await this.room(db, roomId, userId);
       const seats = (
         await db.query(
-          `select s.*,p.display_name,p.status,p.type,p.last_active_at,n.name node_name,n.adapter,n.capabilities,n.owner_user_id,
-           o.display_name owner_name,n.expires_at,n.revoked_at,n.last_seen_at,n.fingerprint,n.connection_transport,
-           (n.session_id is not null and n.revoked_at is null and n.expires_at>now() and n.last_seen_at>now()-interval '45 seconds') is_connected,
-           coalesce(n.ready_until>now(),false) model_ready,
+          `select s.*,p.display_name,p.status,p.type,p.last_active_at,n.agent_name node_name,n.adapter,n.capabilities,n.owner_user_id,
+           o.display_name owner_name,p.avatar_url,n.platform_scope,n.expires_at,n.revoked_at,n.last_seen_at,n.connection_transport,
+           (n.session_id is not null and n.revoked_at is null and n.expires_at>now() and n.last_seen_at>now()-interval '45 seconds' and (not n.platform_scope or n.active_seat_id=s.participant_id)) is_connected,
+           coalesce(n.ready_until>now() and (not n.platform_scope or n.active_seat_id=s.participant_id),false) model_ready,
            coalesce((select kind from agent_turns j where j.participant_id=p.id and j.status='leased'),'idle') activity
            from agent_seats s join participants p on p.id=s.participant_id join agent_nodes n on n.id=s.node_id
            join profiles o on o.id=n.owner_user_id where p.room_id=$1 and s.deleted_at is null order by s.created_at`,
@@ -491,7 +596,10 @@ export class AgentService {
         )
       ).rows;
       return {
-        seats,
+        seats: seats.map((s) => ({
+          ...s,
+          capabilities: safeResult(s.capabilities),
+        })),
         brief,
         acks,
         session,
@@ -543,15 +651,15 @@ export class AgentService {
           [seat.participant_id, action === "reject" ? "rejected" : "revoked"],
         );
         await db.query(
-          "update agent_nodes set revoked_at=now(),session_id=null,last_seen_at=null where id=$1",
-          [seat.node_id],
+          "update agent_nodes set revoked_at=case when platform_scope then revoked_at else now() end,session_id=case when not platform_scope or active_seat_id=$2 then null else session_id end,last_seen_at=case when not platform_scope or active_seat_id=$2 then null else last_seen_at end,active_seat_id=case when active_seat_id=$2 then null else active_seat_id end where id=$1",
+          [seat.node_id, seat.participant_id],
         );
         await db.query(
           "update participants set status='left',last_active_at=null where id=$1",
           [seat.participant_id],
         );
         await db.query(
-          "update agent_turns set status='cancelled',lease_hash=null,error='席位已撤销' where participant_id=$1 and status in ('queued','leased')",
+          "update agent_turns set status='cancelled',lease_hash=null,error='席位已撤销' where participant_id=$1 and status in ('queued','leased','awaiting_review')",
           [seat.participant_id],
         );
         if (room.agent_host_participant_id === seat.participant_id)
@@ -580,7 +688,7 @@ export class AgentService {
         );
         if (muted) {
           await db.query(
-            "update agent_turns set status='cancelled',lease_hash=null,error='席位已静音' where participant_id=$1 and status in ('queued','leased')",
+            "update agent_turns set status='cancelled',lease_hash=null,error='席位已静音' where participant_id=$1 and status in ('queued','leased','awaiting_review')",
             [seat.participant_id],
           );
           await this.pauseAffected(
@@ -806,7 +914,7 @@ export class AgentService {
         [roomId],
       );
       await db.query(
-        "update agent_turns set status='cancelled',lease_hash=null,error='需求设计已更新' where room_id=$1 and status in ('queued','leased')",
+        "update agent_turns set status='cancelled',lease_hash=null,error='需求设计已更新' where room_id=$1 and status in ('queued','leased','awaiting_review')",
         [roomId],
       );
       const revision = Number(
@@ -1077,7 +1185,7 @@ export class AgentService {
           ],
         );
         await db.query(
-          "update agent_turns set status='cancelled',lease_hash=null,error=$2 where session_id=$1 and status in ('queued','leased')",
+          "update agent_turns set status='cancelled',lease_hash=null,error=$2 where session_id=$1 and status in ('queued','leased','awaiting_review')",
           [session.id, action === "stop" ? "协作已停止" : "协作已暂停"],
         );
       } else if (action === "resume") {
@@ -1106,7 +1214,7 @@ export class AgentService {
             if (
               !(
                 await db.query(
-                  "select 1 from agent_turns where session_id=$1 and participant_id=$2 and kind='align' and status in ('queued','leased')",
+                  "select 1 from agent_turns where session_id=$1 and participant_id=$2 and kind='align' and status in ('queued','leased','awaiting_review')",
                   [session.id, pid],
                 )
               ).rowCount &&
@@ -1130,7 +1238,7 @@ export class AgentService {
           stage === "discussing" &&
           !(
             await db.query(
-              "select 1 from agent_turns where session_id=$1 and status in ('queued','leased')",
+              "select 1 from agent_turns where session_id=$1 and status in ('queued','leased','awaiting_review')",
               [session.id],
             )
           ).rowCount
@@ -1325,7 +1433,7 @@ export class AgentService {
       if (
         (
           await db.query(
-            "select 1 from agent_turns where participant_id=$1 and status='leased'",
+            "select 1 from agent_turns where participant_id=$1 and status in ('leased','awaiting_review')",
             [seat.participant_id],
           )
         ).rowCount
@@ -1333,7 +1441,7 @@ export class AgentService {
         return null;
       const turn = (
         await db.query(
-          "select j.* from agent_turns j left join collaboration_sessions s on s.id=j.session_id where j.participant_id=$1 and j.status='queued' and j.queued_until>now() and (j.session_id is null or s.stage not in ('paused','stopped','completed')) and (j.kind in ('align','develop') or not exists(select 1 from agent_turns earlier where earlier.session_id=j.session_id and earlier.sequence<j.sequence and earlier.status in ('queued','leased'))) order by j.sequence limit 1 for update of j skip locked",
+          "select j.* from agent_turns j left join collaboration_sessions s on s.id=j.session_id where j.participant_id=$1 and j.status='queued' and j.queued_until>now() and (j.session_id is null or s.stage not in ('paused','stopped','completed')) and (j.kind in ('align','develop') or not exists(select 1 from agent_turns earlier where earlier.session_id=j.session_id and earlier.sequence<j.sequence and earlier.status in ('queued','leased','awaiting_review'))) order by j.sequence limit 1 for update of j skip locked",
           [seat.participant_id],
         )
       ).rows[0];
@@ -1493,7 +1601,8 @@ export class AgentService {
     ).rows[0];
     if (!job || !lease || job.lease_hash !== digest(lease))
       fail(409, "发言或开发授权已失效。");
-    if (completed && job.status === "completed") return { n, seat, job };
+    if (completed && ["completed", "awaiting_review"].includes(job.status))
+      return { n, seat, job };
     if (
       job.status !== "leased" ||
       new Date(job.lease_until) <= new Date() ||
@@ -1518,74 +1627,86 @@ export class AgentService {
   async complete(token, turnId, lease, raw, sessionId) {
     const result = turnResultSchema.parse(raw);
     return this.transaction(async (db) => {
-      const { seat, job } = await this.activeJob(db, token, turnId, lease, {
+      const { n, seat, job } = await this.activeJob(db, token, turnId, lease, {
         sessionId,
         completed: true,
       });
       if (job.status === "completed") return { ok: true, duplicate: true };
-      const session = job.session_id
-        ? (
-            await db.query(
-              "select * from collaboration_sessions where id=$1 for update",
-              [job.session_id],
-            )
-          ).rows[0]
-        : null;
-      const brief = session
-        ? (
-            await db.query("select * from collaboration_briefs where id=$1", [
-              session.brief_id,
-            ])
-          ).rows[0]
-        : null;
-      if (result.speakers.length && job.kind !== "host")
-        fail(403, "只有选定的 Agent 主持人可以安排下一位发言者。");
-      if (result.plan.length && job.kind !== "host")
-        fail(403, "只有选定的 Agent 主持人可以提出分工。");
-      if (job.kind === "develop") {
-        const artifact = (
-          await db.query(
-            "select * from collaboration_artifacts where id=$1 and turn_id=$2 and brief_hash=$3",
-            [result.artifact_id, job.id, brief.content_hash],
-          )
-        ).rows[0];
-        if (!artifact) fail(409, "请先回传与当前需求版本对应的本地开发成果。");
-        await db.query(
-          "update collaboration_work set state='submitted' where task_id=$1",
-          [job.task_id],
-        );
-      }
-      if (result.message) {
-        const reply = job.source_message_id
-          ? { reply_to_message_id: job.source_message_id }
-          : {};
-        await db.query("select island_actor_command($1,'message',$2)", [
-          seat.participant_id,
-          JSON.stringify({
-            room_id: job.room_id,
-            content: result.message,
-            client_message_id: job.id,
-            ...reply,
-          }),
-        ]);
-      }
-      if (result.acknowledge && brief)
-        await this.ack(db, brief, seat.participant_id);
-      await db.query(
-        "update agent_turns set status='completed',result=$2,completed_at=now() where id=$1",
-        [job.id, JSON.stringify(result)],
-      );
-      await this.emit(
-        db,
-        job.room_id,
-        "agent.turn.completed",
-        seat.participant_id,
-        job.id,
-        { kind: job.kind },
-      );
-      if (session) await this.advance(db, session, job, result);
-      return { ok: true };
+      if (job.status === "awaiting_review")
+        return { ok: true, pending_review: true, duplicate: true };
+      if (
+        (result.speakers.length && job.kind !== "host") ||
+        (result.plan.length && job.kind !== "host")
+      )
+        fail(403, "只有选定的 Agent 主持人可以提出发言安排和分工。");
+      const staged = await this.stageResult(db, n, job, result);
+      if (staged) return staged;
+      return this.publishResult(db, seat, job, result);
     });
+  }
+  async publishResult(db, seat, job, result) {
+    const session = job.session_id
+      ? (
+          await db.query(
+            "select * from collaboration_sessions where id=$1 for update",
+            [job.session_id],
+          )
+        ).rows[0]
+      : null;
+    const brief = session
+      ? (
+          await db.query("select * from collaboration_briefs where id=$1", [
+            session.brief_id,
+          ])
+        ).rows[0]
+      : null;
+    if (result.speakers.length && job.kind !== "host")
+      fail(403, "只有选定的 Agent 主持人可以安排下一位发言者。");
+    if (result.plan.length && job.kind !== "host")
+      fail(403, "只有选定的 Agent 主持人可以提出分工。");
+    if (job.kind === "develop") {
+      const artifact = (
+        await db.query(
+          "select * from collaboration_artifacts where id=$1 and turn_id=$2 and brief_hash=$3",
+          [result.artifact_id, job.id, brief.content_hash],
+        )
+      ).rows[0];
+      if (!artifact) fail(409, "请先回传与当前需求版本对应的本地开发成果。");
+      await db.query(
+        "update collaboration_work set state='submitted' where task_id=$1",
+        [job.task_id],
+      );
+    }
+    if (result.message) {
+      const reply = job.source_message_id
+        ? { reply_to_message_id: job.source_message_id }
+        : {};
+      await db.query("select island_actor_command($1,'message',$2)", [
+        seat.participant_id,
+        JSON.stringify({
+          room_id: job.room_id,
+          content: result.message,
+          client_message_id: job.id,
+          ...reply,
+        }),
+      ]);
+    }
+    if (result.acknowledge && brief)
+      await this.ack(db, brief, seat.participant_id);
+    await db.query(
+      "update agent_turns set status='completed',result=$2,completed_at=now() where id=$1",
+      [job.id, JSON.stringify(result)],
+    );
+    await this.emit(
+      db,
+      job.room_id,
+      "agent.turn.completed",
+      seat.participant_id,
+      job.id,
+      { kind: job.kind },
+    );
+    if (session) await this.advance(db, session, job, result);
+    return { ok: true };
   }
   async advance(db, session, job, result) {
     if (job.kind === "host") {
@@ -1647,7 +1768,7 @@ export class AgentService {
     } else if (job.kind === "speak") {
       const waiting = (
         await db.query(
-          "select 1 from agent_turns where session_id=$1 and kind='speak' and status in ('queued','leased')",
+          "select 1 from agent_turns where session_id=$1 and kind='speak' and status in ('queued','leased','awaiting_review')",
           [session.id],
         )
       ).rowCount;
@@ -1729,7 +1850,7 @@ export class AgentService {
       [session.id, error],
     );
     await db.query(
-      "update agent_turns set status='cancelled',lease_hash=null,error=$2 where session_id=$1 and status in ('queued','leased')",
+      "update agent_turns set status='cancelled',lease_hash=null,error=$2 where session_id=$1 and status in ('queued','leased','awaiting_review')",
       [session.id, error],
     );
     await this.emit(
@@ -1746,7 +1867,7 @@ export class AgentService {
       const { job, seat } = await this.activeJob(db, token, turnId, lease, {
         sessionId,
       });
-      const message = boundedError(error);
+      const message = "Agent 执行失败，请设备所有者查看本地日志。";
       await db.query(
         "update agent_turns set status='failed',error=$2,completed_at=now() where id=$1",
         [job.id, message],
@@ -1781,57 +1902,17 @@ export class AgentService {
       if (!["super", "technical"].includes(role))
         fail(403, "需要超级或技术管理员权限。");
       z.string().trim().min(3).max(2000).parse(reason);
-      const target = (
-        await db.query(
-          "select s.participant_id,p.room_id,n.id node_id from agent_nodes n join agent_seats s on s.node_id=n.id join participants p on p.id=s.participant_id where n.id=$1",
-          [id.parse(nodeId)],
-        )
-      ).rows[0];
-      if (!target) fail(404, "设备不存在。");
-      await db.query("select id from rooms where id=$1 for update", [
-        target.room_id,
-      ]);
-      const previous = (
-        await db.query(
-          "select revoked_at from agent_nodes where id=$1 for update",
-          [target.node_id],
-        )
-      ).rows[0];
-      if (previous.revoked_at) return { ok: true, already_revoked: true };
-      await db.query(
-        "update agent_nodes set revoked_at=now(),session_id=null,last_seen_at=null where id=$1",
-        [target.node_id],
-      );
-      await db.query(
-        "update agent_seats set state='revoked' where participant_id=$1",
-        [target.participant_id],
-      );
-      await db.query(
-        "update participants set status='left',last_active_at=null where id=$1",
-        [target.participant_id],
-      );
-      await db.query(
-        "update agent_turns set status='cancelled',lease_hash=null,error='平台管理员撤销设备' where participant_id=$1 and status in ('queued','leased')",
-        [target.participant_id],
-      );
-      await this.pauseAffected(
+      const result = await this.revokeDevice(
         db,
-        target.room_id,
-        target.participant_id,
-        "平台管理员撤销了参与设备。",
+        id.parse(nodeId),
+        "平台管理员撤销设备",
       );
+      if (result.already_revoked) return result;
       await db.query(
         "insert into admin_audit_logs(admin_id,action,target_type,target_id,reason,trace_id) values($1,'agent.revoke','agent_node',$2,$3,$4)",
         [adminId, nodeId, reason, randomUUID()],
       );
-      await this.emit(
-        db,
-        target.room_id,
-        "agent.seat.updated",
-        null,
-        target.participant_id,
-      );
-      return { ok: true };
+      return result;
     });
   }
   async nodeDownload(token, fileId, sessionId, maxBytes = Infinity) {
@@ -1879,12 +1960,42 @@ export class AgentService {
           await this.storage.loadFile(source.storage_path),
         );
       if (treeHash(base) !== brief.base_hash) fail(409, "代码基线已变化。");
-      const { manifest } = await unpackArtifact(
+      const permit = (
+        await db.query(
+          "select * from agent_private_reviews where turn_id=$1 and kind='artifact' and status='approved' and expires_at>now()",
+          [job.id],
+        )
+      ).rows[0];
+      if (!permit || permit.payload_hash !== digest(bytes))
+        fail(
+          403,
+          "请先由设备所有者批准此份成果的 SHA-256；未经同意不接收文件正文。",
+        );
+      const approved = await this.vault.open(
+        permit.payload_cipher,
+        `review:${permit.id}`,
+      );
+      if (
+        approved.size !== bytes.length ||
+        bytes.length > (await this.policy(db)).artifact_mb * 1048576
+      )
+        fail(413, "成果大小与批准清单不一致或超过限制。");
+      const { manifest, files } = await unpackArtifact(
         bytes,
         base,
         { brief_hash: brief.content_hash, task_id: job.task_id },
         work.paths,
       );
+      if (
+        manifest.changes.length !== approved.paths.length ||
+        manifest.changes.some((c) => !approved.paths.includes(c.path))
+      )
+        fail(400, "文件清单与本人批准的内容不一致。");
+      if (artifactFindings(files).length)
+        fail(
+          400,
+          "成果包含疑似隐私、凭据或本机路径，已阻止公开，请在本机检查。",
+        );
       const fileId = randomUUID(),
         path = seat.room_id + "/" + fileId;
       await this.storage.storeFile(path, bytes, "application/zip", db);
@@ -2017,7 +2128,7 @@ export class AgentService {
       if (
         (
           await db.query(
-            "select 1 from agent_turns where task_id=$1 and status in ('queued','leased')",
+            "select 1 from agent_turns where task_id=$1 and status in ('queued','leased','awaiting_review')",
             [taskId],
           )
         ).rowCount
@@ -2210,9 +2321,33 @@ export class AgentService {
     });
   }
   async housekeeping() {
+    await this.transaction(async (db) => {
+      await db.query(
+        "update agent_pairings set code_cipher=null,doc_cipher=null where used_at is not null or revoked_at is not null or expires_at<=now()",
+      );
+      const stale = (
+        await db.query(
+          "select distinct j.room_id from agent_private_reviews r join agent_turns j on j.id=r.turn_id where r.status='pending' and (r.expires_at<=now() or j.status not in ('leased','awaiting_review')) order by j.room_id",
+        )
+      ).rows;
+      for (const r of stale) {
+        await db.query("select id from rooms where id=$1 for update", [
+          r.room_id,
+        ]);
+        const expired = await db.query(
+          "update agent_private_reviews v set status='expired',payload_cipher='' from agent_turns j where v.turn_id=j.id and j.room_id=$1 and v.status='pending' and (v.expires_at<=now() or j.status not in ('leased','awaiting_review')) returning v.turn_id",
+          [r.room_id],
+        );
+        for (const v of expired.rows)
+          await db.query(
+            "update agent_turns set status='expired',lease_hash=null where id=$1 and status='awaiting_review'",
+            [v.turn_id],
+          );
+      }
+    });
     const rooms = (
       await this.pool.query(
-        "select distinct room_id from agent_turns where status in ('queued','leased') union select room_id from collaboration_sessions where stage not in ('completed','stopped','paused')",
+        "select distinct room_id from agent_turns where status in ('queued','leased','awaiting_review') union select room_id from collaboration_sessions where stage not in ('completed','stopped','paused')",
       )
     ).rows;
     for (const { room_id: r } of rooms)
@@ -2282,7 +2417,7 @@ export class AgentService {
           if (error) {
             await this.pause(db, s, error);
             await db.query(
-              "update agent_turns set status='cancelled',lease_hash=null,error=$2 where session_id=$1 and status in ('queued','leased')",
+              "update agent_turns set status='cancelled',lease_hash=null,error=$2 where session_id=$1 and status in ('queued','leased','awaiting_review')",
               [s.id, error],
             );
           }
@@ -2291,4 +2426,5 @@ export class AgentService {
   }
 }
 
+Object.assign(AgentService.prototype, registryMethods);
 export { AgentError };

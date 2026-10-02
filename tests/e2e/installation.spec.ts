@@ -100,7 +100,8 @@ test.describe.serial("真实安装与保留数据升级", () => {
         ...process.env,
         ISLAND_ROOT: checkout,
         ISLAND_CONFIG_FILE: configFile,
-        ISLAND_NPM_CACHE: "/workspace/.npm-cache",
+        ISLAND_NPM_CACHE:
+          process.env.ISLAND_NPM_CACHE || resolve(".data/npm-cache"),
         ISLAND_NO_BROWSER: "true",
         ISLAND_SETUP_PORT: "0",
       },
@@ -159,13 +160,23 @@ test.describe.serial("真实安装与保留数据升级", () => {
     await page.getByRole("button", { name: "下一步", exact: true }).click();
     await page.getByRole("button", { name: /已有 PostgreSQL/ }).click();
     await page.getByLabel("发现的数据库").selectOption("manual");
-    await page.getByLabel("数据库主机 / Socket 目录").fill("127.0.0.1");
-    await page.getByLabel("数据库端口", { exact: true }).fill("55432");
+    const databaseURL = new URL(
+      process.env.DATABASE_URL ||
+        "postgresql://island:local-development-only@127.0.0.1:55432/postgres",
+    );
+    await page
+      .getByLabel("数据库主机 / Socket 目录")
+      .fill(databaseURL.hostname);
+    await page
+      .getByLabel("数据库端口", { exact: true })
+      .fill(databaseURL.port || "5432");
     await page.getByLabel("数据库名称", { exact: true }).fill(database);
-    await page.getByLabel("数据库账号", { exact: true }).fill("island");
+    await page
+      .getByLabel("数据库账号", { exact: true })
+      .fill(decodeURIComponent(databaseURL.username));
     await page
       .getByLabel("数据库密码", { exact: true })
-      .fill("local-development-only");
+      .fill(decodeURIComponent(databaseURL.password));
     await page.getByLabel("私有文件目录").fill(resolve(directory, "files"));
     await page.getByRole("button", { name: "测试连接与安装权限" }).click();
     await expect(page.getByText(/连接与权限验证通过/)).toBeVisible();
@@ -413,7 +424,8 @@ test("全新内置 PostgreSQL 自动配置、安装窗口关闭后运行及启�
     ...process.env,
     ISLAND_ROOT: copy,
     ISLAND_CONFIG_FILE: file,
-    ISLAND_NPM_CACHE: "/workspace/.npm-cache",
+    ISLAND_NPM_CACHE:
+      process.env.ISLAND_NPM_CACHE || resolve(".data/npm-cache"),
     ISLAND_NO_BROWSER: "true",
     ISLAND_SETUP_PORT: "0",
   };

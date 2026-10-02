@@ -5,6 +5,7 @@ import { AgentService } from "./service.mjs";
 import { createRemoteMcp } from "./remote-mcp.mjs";
 import { nodeClientBundle } from "./client-bundle.mjs";
 import { repositoryRoot } from "@island/runtime";
+import { digest } from "./archive.mjs";
 import {
   WIRE_VERSION,
   WIRE_MAX_BYTES,
@@ -125,8 +126,13 @@ export function attachGateway(server, pool, storage, env = process.env) {
             if (value.until < now) rates.delete(key);
         const input = JSON.parse((await drain(req, 16384)).toString());
         if (path === "/api/agent-node/client") {
-          await service.authorizeClientDownload(input?.code);
+          const expected = await service.authorizeClientDownload(input?.code);
           const bytes = await nodeClientBundle(repositoryRoot());
+          if (expected && digest(bytes) !== expected)
+            throw new AgentError(
+              409,
+              "客户端版本已更新，请设备所有者重新生成安装邀请。",
+            );
           res.writeHead(200, {
             "content-type": "application/zip",
             "content-disposition":
@@ -169,7 +175,15 @@ export function attachGateway(server, pool, storage, env = process.env) {
         await service.transaction((db) =>
           service.activeJob(db, token, turn, lease),
         );
-        const bytes = await drain(req, 30 * 1024 * 1024);
+        if (
+          (await service.artifactPermit(token, turn, lease)).status !==
+          "approved"
+        )
+          throw new AgentError(403, "文件正文上传前需要设备所有者确认。");
+        const bytes = await drain(
+          req,
+          (await service.policy()).artifact_mb * 1024 * 1024,
+        );
         response(
           res,
           200,
@@ -283,6 +297,31 @@ export function attachGateway(server, pool, storage, env = process.env) {
                   }
                   if (job) peer.active = { id: job.id, lease: job.lease };
                   send(ws, "job", job, requestId);
+                } else if (packet.type === "artifact-proposal") {
+                  send(
+                    ws,
+                    "ack",
+                    await service.proposeArtifact(
+                      token,
+                      packet.data.id,
+                      packet.data.lease,
+                      packet.data.proposal,
+                      connection.session_id,
+                    ),
+                    requestId,
+                  );
+                } else if (packet.type === "artifact-permit") {
+                  send(
+                    ws,
+                    "ack",
+                    await service.artifactPermit(
+                      token,
+                      packet.data.id,
+                      packet.data.lease,
+                      connection.session_id,
+                    ),
+                    requestId,
+                  );
                 } else if (packet.type === "complete") {
                   const result = await service.complete(
                     token,
@@ -378,6 +417,7 @@ export function attachGateway(server, pool, storage, env = process.env) {
         } catch (e) {
           send(peer.ws, "error", {
             status: e.status || 503,
+            code: e.code,
             error: boundedError(e),
           });
           peer.ws.close(4003, "设备权限已失效");

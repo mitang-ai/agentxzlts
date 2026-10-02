@@ -1806,7 +1806,7 @@ label select {
     margin: 0;
     width: 60px;
   }
-  .rail-settings {
+  .rail .rail-settings {
     display: none;
   }
   .room-list {
