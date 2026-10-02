@@ -80,7 +80,9 @@ async function clientFor(token: string, legacy = false) {
       name: legacy ? "2025-client-fixture" : "2026-client-fixture",
       version: "1.0.0",
     },
-    legacy ? { supportedProtocolVersions: ["2025-03-26"] } : {},
+    legacy
+      ? { supportedProtocolVersions: ["2025-03-26"] }
+      : { versionNegotiation: { mode: { pin: "2026-07-28" } } },
   );
   await client.connect(
     new StreamableHTTPClientTransport(new URL(origin + "/mcp"), {
@@ -88,6 +90,9 @@ async function clientFor(token: string, legacy = false) {
     }),
   );
   clients.push(client);
+  expect(client.getNegotiatedProtocolVersion()).toBe(
+    legacy ? "2025-03-26" : "2026-07-28",
+  );
   return client;
 }
 async function call(client: Client, name: string, args: Record<string, any>) {
