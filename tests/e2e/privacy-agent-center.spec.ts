@@ -158,7 +158,14 @@ test("用户级 Agent、一次性说明、本人审核、头像裁剪、共享�
       ).format,
     ).toBe("webp");
     await page.getByRole("button", { name: "我的 Agent", exact: true }).click();
-    await device.getByText("编辑昵称与头像", { exact: true }).click();
+    await device.getByText("昵称、头像与审核设置", { exact: true }).click();
+    await expect(
+      device.getByLabel("消息发送前由我审核", { exact: true }),
+    ).not.toBeChecked();
+    await expect(
+      device.getByLabel("文件发送前由我审核", { exact: true }),
+    ).not.toBeChecked();
+    await device.getByLabel("消息发送前由我审核", { exact: true }).check();
     await device.getByLabel("Agent 昵称").fill("独立身份的 Agent");
     await device.getByLabel("选择头像图片").setInputFiles({
       name: "agent.png",
@@ -252,6 +259,77 @@ test("用户级 Agent、一次性说明、本人审核、头像裁剪、共享�
           ).rows[0].n,
       )
       .toBe("1");
+    // Disabling message review does not disable the independently selected file review.
+    await page.getByRole("button", { name: "刷新", exact: true }).click();
+    const settings = page
+      .locator(".agent-device")
+      .filter({ hasText: "独立身份的 Agent" });
+    await settings.getByLabel("消息发送前由我审核", { exact: true }).uncheck();
+    await settings.getByLabel("文件发送前由我审核", { exact: true }).check();
+    await settings
+      .getByRole("button", { name: "保存 Agent 资料", exact: true })
+      .click();
+    await expect
+      .poll(async () =>
+        (await (await context.request.get("/api/my-agents")).json()).nodes.find(
+          (n: any) => n.id === remote.node_id,
+        ),
+      )
+      .toMatchObject({ privacy_mode: "filtered", file_review: true });
+    await page.reload();
+    await page.getByRole("button", { name: "我的 Agent", exact: true }).click();
+    await settings.getByText("昵称、头像与审核设置", { exact: true }).click();
+    await expect(
+      settings.getByLabel("消息发送前由我审核", { exact: true }),
+    ).not.toBeChecked();
+    await expect(
+      settings.getByLabel("文件发送前由我审核", { exact: true }),
+    ).toBeChecked();
+    await cmd(context, "message", {
+      room_id: room,
+      content: "再回复一次",
+      client_message_id: randomUUID(),
+      mentioned_participant_ids: [seat.participant_id],
+    });
+    const automatic = await tool("island_wait_task", {
+      connection_id: opened.connection_id,
+      timeout_seconds: 1,
+    });
+    expect(
+      (
+        await tool("island_complete_task", {
+          connection_id: opened.connection_id,
+          delivery_id: automatic.task.delivery_id,
+          result: { message: "关闭审核后自动交流" },
+        })
+      ).pending_review,
+    ).not.toBe(true);
+    expect(
+      (
+        await pool.query(
+          "select count(*)::int n from messages where room_id=$1 and content=$2",
+          [room, "关闭审核后自动交流"],
+        )
+      ).rows[0].n,
+    ).toBe(1);
+    await settings.getByLabel("文件发送前由我审核", { exact: true }).uncheck();
+    await settings
+      .getByRole("button", { name: "保存 Agent 资料", exact: true })
+      .click();
+    await expect
+      .poll(
+        async () =>
+          (
+            await (await context.request.get("/api/my-agents")).json()
+          ).nodes.find((n: any) => n.id === remote.node_id)?.file_review,
+      )
+      .toBe(false);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.screenshot({
+      path: "test-results/optional-review-mobile.png",
+      fullPage: true,
+    });
+    await page.setViewportSize({ width: 1280, height: 900 });
     // The admin list includes devices registered in the lobby, not only room seats.
     const lobby = await post(context, "/api/my-agents/remote-connection", {
       host_name: "WorkBuddy",

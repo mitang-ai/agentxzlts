@@ -8,6 +8,7 @@ const id = z.uuid();
 export const policySchema = z
   .object({
     force_review: z.boolean(),
+    force_file_review: z.boolean().default(false),
     allow_remote_mcp: z.boolean(),
     max_agents: z.number().int().min(1).max(50),
     max_pending_invites: z.number().int().min(1).max(20),
@@ -79,7 +80,7 @@ export const registryMethods = {
       );
       const nodes = (
         await db.query(
-          `select id,agent_name,adapter,avatar_url,platform_scope,active_seat_id,privacy_mode,created_at,expires_at,revoked_at,
+          `select id,agent_name,adapter,avatar_url,platform_scope,active_seat_id,privacy_mode,file_review,created_at,expires_at,revoked_at,
     (session_id is not null and revoked_at is null and expires_at>now() and last_seen_at>now()-interval '45 seconds') connected
     from agent_nodes where owner_user_id=$1 order by created_at desc`,
           [userId],
@@ -134,7 +135,8 @@ export const registryMethods = {
         node_id: id,
         agent_name: z.string().trim().min(1).max(40),
         avatar_url: z.string().max(100).nullable().default(null),
-        privacy_mode: z.enum(["review", "filtered"]).default("review"),
+        privacy_mode: z.enum(["review", "filtered"]).optional(),
+        file_review: z.boolean().optional(),
       })
       .strict()
       .parse(input);
@@ -143,13 +145,16 @@ export const registryMethods = {
     return this.transaction(async (db) => {
       const n = await this.ownedNode(db, userId, d.node_id);
       await this.verifyAvatar(db, userId, d.avatar_url);
-      if (d.privacy_mode === "filtered" && (await this.policy(db)).force_review)
+      const policy = await this.policy(db),
+        mode = d.privacy_mode ?? n.privacy_mode,
+        fileReview = d.file_review ?? n.file_review;
+      if (d.privacy_mode === "filtered" && policy.force_review)
         fail(403, "平台要求本人确认发送，不能关闭。");
-      if (d.privacy_mode === "filtered" && !n.capabilities.egress_v2)
-        fail(403, "请先升级本地客户端；第三方宿主保持本人确认。");
+      if (d.file_review === false && policy.force_file_review)
+        fail(403, "平台要求本人确认文件发送，不能关闭。");
       await db.query(
-        "update agent_nodes set agent_name=$2,avatar_url=$3,privacy_mode=$4 where id=$1",
-        [n.id, d.agent_name, d.avatar_url, d.privacy_mode],
+        "update agent_nodes set agent_name=$2,avatar_url=$3,privacy_mode=$4,file_review=$5 where id=$1",
+        [n.id, d.agent_name, d.avatar_url, mode, fileReview],
       );
       const seats = (
         await db.query(
@@ -371,7 +376,10 @@ export const registryMethods = {
         sessionId,
       });
       if (job.kind !== "develop") fail(403, "当前未授权开发成果。");
-      if (d.size > (await this.policy(db)).artifact_mb * 1048576)
+      const policy = await this.policy(db),
+        manual = policy.force_file_review || n.file_review,
+        status = manual ? "pending" : "approved";
+      if (d.size > policy.artifact_mb * 1048576)
         fail(413, "成果超过平台大小限制。");
       const old = (
         await db.query(
@@ -382,11 +390,15 @@ export const registryMethods = {
       if (old) {
         if (old.payload_hash !== d.sha256)
           fail(409, "成果已变化，请取消本轮并重新提交审批。");
-        return { review_id: old.id, status: old.status };
+        return {
+          review_id: old.id,
+          status: old.status,
+          approval_mode: old.approval_mode,
+        };
       }
       const reviewId = randomUUID();
       await db.query(
-        "insert into agent_private_reviews(id,owner_user_id,node_id,turn_id,kind,payload_cipher,payload_hash,expires_at) values($1,$2,$3,$4,'artifact',$5,$6,$7)",
+        "insert into agent_private_reviews(id,owner_user_id,node_id,turn_id,kind,payload_cipher,payload_hash,expires_at,status,approval_mode) values($1,$2,$3,$4,'artifact',$5,$6,$7,$8,$9)",
         [
           reviewId,
           n.owner_user_id,
@@ -395,9 +407,15 @@ export const registryMethods = {
           await this.vault.seal(d, `review:${reviewId}`),
           d.sha256,
           job.hard_deadline,
+          status,
+          manual ? "manual" : "auto",
         ],
       );
-      return { review_id: reviewId, status: "pending" };
+      return {
+        review_id: reviewId,
+        status,
+        approval_mode: manual ? "manual" : "auto",
+      };
     });
   },
   async artifactPermit(token, turnId, lease, sessionId) {
@@ -426,9 +444,7 @@ export const registryMethods = {
       result.checks.length;
     if (
       !unstructured ||
-      (!policy.force_review &&
-        n.privacy_mode === "filtered" &&
-        n.capabilities.egress_v2)
+      (!policy.force_review && n.privacy_mode === "filtered")
     )
       return null;
     const previous = (

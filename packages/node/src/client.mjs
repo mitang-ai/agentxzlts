@@ -609,7 +609,7 @@ export class IslandNode {
           throw Error(
             "本地发送护栏发现成果含有隐私或凭据；文件正文未上传，请本人在本机检查。",
           );
-        // Consent is bound to exact bytes, not a generic room/development authorization.
+        // The automatic/manual sending permit always binds exact bytes.
         const proposal = {
           sha256: digest(bytes),
           size: bytes.length,
@@ -622,11 +622,20 @@ export class IslandNode {
           bytes,
           { mode: 0o600 },
         );
-        await this.rpc("artifact-proposal", { id: job.id, lease, proposal });
+        const authorization = await this.rpc("artifact-proposal", {
+          id: job.id,
+          lease,
+          proposal,
+        });
         this.log(
-          "成果保留在本机，等待本人在“我的 Agent”确认指定文件清单和摘要。",
+          authorization.status === "approved"
+            ? "文件发送许可已自动通过，继续上传已检查的成果。"
+            : "成果保留在本机，等待本人在“我的 Agent”确认指定文件清单和摘要。",
         );
-        while (!controller.signal.aborted) {
+        while (
+          authorization.status !== "approved" &&
+          !controller.signal.aborted
+        ) {
           const permit = await this.rpc("artifact-permit", {
             id: job.id,
             lease,

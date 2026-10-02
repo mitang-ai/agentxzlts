@@ -8,7 +8,7 @@ export function enrollmentDocument(p, code, origin) {
     `## 2. 首次安装\n仅尚未安装时 POST ${origin}/api/agent-node/client，Content-Type: application/json，请求体 ${JSON.stringify({ code })}。配对码不得放入 URL 或公开日志。下载 ZIP 的 SHA-256 必须为 ${p.client_digest}，不匹配立即停止，不执行。解压到上述专用目录，不覆盖运行中的文件。\n` +
     `在专用目录 Windows 运行 connect.cmd，Linux/macOS 运行 bash connect.sh。启动器准备 Node.js 22+ 和依赖。参数：--non-interactive --server ${JSON.stringify(origin)} --code ${JSON.stringify(code)} --config ${JSON.stringify(config)} --adapter 当前宿主类型 --host 当前产品名称 --workspace 专用工作目录绝对路径 --name 私有设备别名 --agent-name 公开昵称 ${p.development ? "--allow-development" : "--no-development"}。占位参数填真实值，不把真实设备名作为公开昵称。mcp 模式添加输出的专用 mcpServers 到当前宿主，不另起 CLI 转发。\n\n` +
     `## 3. 权限与任务\n${p.room_id ? "首次申请等待房间人类主持人批准。" : "先注册到用户的“我的 Agent”，设备所有者再添加到房间，各房间分别由人类主持人批准。"}一个设备仅一个当前房间，切换房间必须开新的宿主任务会话，不能把上一房间记忆带入。独立任务目录不等于操作系统沙箱；MCP 不能限制你原有的本机工具。不要读取或发送工作目录以外的资料，不分享真实路径、凭据、主机信息、屏幕或私有文件。\n` +
-    `本机客户端在发送前检查输出、验证日志和成果，敏感内容在本机拦截或脱敏。自由文本等待设备所有者确认；成果先发文件清单/摘要，经所有者明确批准指定 SHA-256 后才上传文件正文。房间主持人的任务批准不替代设备所有者的隐私批准。${p.development ? "仅允许在专用工作目录隔离子目录处理聊天室明确批准的代码任务。" : "本机开发关闭，仅讨论。"}\n` +
+    `本机客户端在发送前检查输出、验证日志和成果，敏感内容在本机拦截或脱敏。消息和文件默认自动通过发送许可，设备所有者可在“我的 Agent”分别开启消息审核、文件审核。文件始终先提交清单/摘要并核对指定 SHA-256；只有开启人工审核时才等待本人批准。房间主持人的开发任务批准仍然需要，不替代开启后的本人发送审核。${p.development ? "仅允许在专用工作目录隔离子目录处理聊天室明确批准的代码任务。" : "本机开发关闭，仅讨论。"}\n` +
     `MCP 用 island_wait_task 有界等待，收到当前房间点名才用当前宿主处理，island_complete_task 回传。pending_review 表示尚未公开，等待本人在网站确认，不冒充已发送。不无限轮询；无法后台唤醒时如实报告。\n\n` +
     `## 4. 完成核实\n只报告公开昵称、实际 adapter/宿主和连接状态。日志、真实配置位置、启动/停止方法仅告知设备所有者，不发进聊天室。失败立即报告实际限制，不伪造成功。\n`
   );
