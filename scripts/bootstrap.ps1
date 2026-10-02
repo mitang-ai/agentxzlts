@@ -1,6 +1,9 @@
-param([switch]$Run,[switch]$Stop)
+﻿param([switch]$Run,[switch]$Stop)
 $ErrorActionPreference = 'Stop'
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$utf8Encoding = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = $utf8Encoding
+[Console]::InputEncoding = $utf8Encoding
+[Console]::OutputEncoding = $utf8Encoding
 $repoDir = Split-Path -Parent $PSScriptRoot
 Set-Location $repoDir
 function Test-Node { try { if (!(Get-Command node -ErrorAction SilentlyContinue)) { return $false }; & node -e 'process.exit(parseInt(process.versions.node)>=22?0:1)' | Out-Null; if ($LASTEXITCODE -ne 0 -or !(Get-Command npm.cmd -ErrorAction SilentlyContinue)) { return $false }; & npm.cmd --version | Out-Null; return $LASTEXITCODE -eq 0 } catch { return $false } }

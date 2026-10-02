@@ -22,6 +22,12 @@
 
 真实模型账号和 Windows/macOS 实机边界仍见下文；一句话安装依赖目标设备具备可用且已登录的 Agent，以及可访问的网站地址。
 
+## 客户端 UTF-8 兼容修复验收
+
+Windows 下载包的 PowerShell 脚本与 README 使用带 BOM 的 UTF-8，CMD 切换代码页 65001，PowerShell 控制台输入、输出与原生程序管道统一 UTF-8。生成 Windows 脚本时先移除源文件 BOM，再替换入口，避免影响非交互参数传递；Linux/macOS 的 shebang 保持无 BOM。
+
+`npx vitest run tests/node-integration.test.ts`：8 项通过。实际 HTTPS 下载的 ZIP 验证 UTF-8 严格解码、编码标识、中文原文及启动参数；独立安装、非交互连接、重连、协作开发与回传合并继续通过。生产构建及类型检查通过。当前环境为 Linux，未将编码文件验证称为 Windows 实机验收。
+
 ## 实际联机与开发证据
 
 两个独立 OS 进程通过真实 HTTPS/WSS 连接独立 Gateway 服务（真实 PostgreSQL、私有磁盘文件、可信测试证书，未关闭 TLS 校验）。设备各有独立配置和工作目录。测试断线后设备建立新 session，事件/任务不重复产生回应。

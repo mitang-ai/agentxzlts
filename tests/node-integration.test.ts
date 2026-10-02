@@ -237,6 +237,38 @@ describe.sequential(
       );
       expect(download.status).toBe(200);
       const files = await readArchive(download.data);
+      // 校验真正下载的 ZIP，防止 PS 5.1/旧记事本把中文按 ANSI 解析。
+      const utf8 = new TextDecoder("utf-8", { fatal: true });
+      for (const path of ["scripts/node-bootstrap.ps1", "README.txt"]) {
+        const bytes = files.get(path)!;
+        expect(
+          bytes.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf])),
+        ).toBe(true);
+        expect(() => utf8.decode(bytes)).not.toThrow();
+      }
+      const windowsScript = utf8.decode(
+        files.get("scripts/node-bootstrap.ps1")!,
+      );
+      expect(windowsScript).toMatch(/^\$nodeArguments = \$args\r\n/);
+      expect(windowsScript).toContain(
+        "正在下载项目私有 Node.js，不修改系统安装…",
+      );
+      expect(windowsScript).toContain(
+        "[Console]::InputEncoding = $utf8Encoding",
+      );
+      expect(windowsScript).toContain(
+        "[Console]::OutputEncoding = $utf8Encoding",
+      );
+      expect(windowsScript).toContain("$OutputEncoding = $utf8Encoding");
+      expect(utf8.decode(files.get("README.txt")!)).toContain(
+        "协作岛异地 Node 客户端",
+      );
+      expect(files.get("connect.cmd")!.toString()).toMatch(
+        /^@echo off\r\nchcp 65001 >nul\r\n/,
+      );
+      expect(files.get("connect.sh")!.toString()).toMatch(
+        /^#!\/usr\/bin\/env bash\n/,
+      );
       expect(files.get("connect.sh")!.toString()).toContain('bootstrap "$@"');
       expect(files.get("scripts/node-bootstrap.ps1")!.toString()).toContain(
         "bootstrap @nodeArguments",
