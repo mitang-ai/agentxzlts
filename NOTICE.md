@@ -9,7 +9,8 @@
 | lucide-react                                  | ISC        |
 | Playwright                                    | Apache-2.0 |
 | embedded-postgres wrapper                     | MIT        |
+| ws, yauzl, yazl, proper-lockfile              | MIT        |
 
 embedded-postgres 附带的 PostgreSQL binaries 来源于 zonky embedded-postgres-binaries，分发包采用 Apache-2.0；PostgreSQL 自身使用 PostgreSQL License。部署/重新分发二进制时保留对应包中的授权文件。
 
-OpenAgents、ACP、A2A、MCP 等仅为文档参考和未来接口边界，本项目未复制其产品代码、未 Fork 这些项目。
+OpenAgents、MCP 为文档参考；ACP 与 A2A 已有本项目编写的适配器，本项目未复制其产品代码、未 Fork 这些项目。proper-lockfile 用于本机客户端的跨进程实例锁，保留依赖中的 MIT 授权。

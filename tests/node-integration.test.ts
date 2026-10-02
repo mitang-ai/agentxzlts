@@ -8,6 +8,7 @@ import {
   readFile,
   readdir,
   rm,
+  utimes,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve, dirname } from "node:path";
@@ -15,6 +16,7 @@ import { createServer, request } from "node:https";
 import { spawn, fork, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import WebSocket from "ws";
+import { createHash } from "node:crypto";
 // @ts-ignore Executable ES modules used by the real server and client.
 import { attachGateway } from "../packages/agents/gateway.mjs";
 // @ts-ignore
@@ -45,10 +47,12 @@ async function run(command: string, args: string[], cwd = root) {
     env: {
       ...process.env,
       npm_config_cache: resolve(process.cwd(), ".npm-cache"),
+      ...(cert ? { NODE_EXTRA_CA_CERTS: resolve(root, "cert.pem") } : {}),
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
+  bootstrapChildren.push(child);
   child.stdout.on("data", (b) => {
     output += b;
   });
@@ -364,9 +368,161 @@ describe.sequential(
             config.node_id,
           ])
         ).rows[0].session_id;
+        const repeated = await run(
+          "bash",
+          ["connect.sh", ...flags],
+          bundleRoot,
+        );
+        expect(repeated).toContain("不重复配对、启动或执行");
+        expect((await service.state(user, bootstrapRoom)).seats).toHaveLength(
+          1,
+        );
+        expect(
+          (
+            await pool.query("select session_id from agent_nodes where id=$1", [
+              config.node_id,
+            ])
+          ).rows[0].session_id,
+        ).toBe(firstSession);
+        // 审批后无需重启，终端和本机 status 都应更新为 approved。
+        await service.seatAction(user, bootstrapRoom, "approve", {
+          participant_id: config.participant_id,
+        });
+        await waitFor(
+          async () =>
+            JSON.parse(await readFile(configFile + ".status.json", "utf8"))
+              .state === "approved",
+          "审批后本机状态更新",
+        );
+        expect(logs.join("\n")).toContain("联机席位已批准，等待点名或任务");
+        const liveStatus = JSON.parse(
+          await run(
+            process.execPath,
+            [
+              "packages/node/bin/island-node.mjs",
+              "status",
+              "--config",
+              configFile,
+            ],
+            bundleRoot,
+          ),
+        );
+        expect(liveStatus.connection.state).toBe("approved");
+        expect(liveStatus.connection.connected).toBe(true);
+        expect(liveStatus).not.toHaveProperty("token");
+        // 使用相同身份的另一个网络连接应被拒绝，不能修改原 session。
+        const duplicateStatus = await new Promise<number>((yes, no) => {
+          const ws = new WebSocket(
+            url.replace("https:", "wss:") + "/agent-wire",
+            { ca: cert, headers: { authorization: "Bearer " + config.token } },
+          );
+          ws.on("unexpected-response", (_req, response) => {
+            response.resume();
+            yes(response.statusCode!);
+          });
+          ws.on("open", () => {
+            ws.close();
+            no(Error("重复身份不应获准连接"));
+          });
+          ws.on("error", () => {});
+        });
+        expect(duplicateStatus).toBe(409);
+        const copiedFile = resolve(root, "copied-identity/config.json");
+        await mkdir(dirname(copiedFile), { recursive: true });
+        await writeFile(copiedFile, JSON.stringify(config));
+        let copiedError = "";
+        try {
+          await run(
+            process.execPath,
+            [
+              "packages/node/bin/island-node.mjs",
+              "start",
+              "--config",
+              copiedFile,
+            ],
+            bundleRoot,
+          );
+        } catch (error) {
+          copiedError = String(error);
+        }
+        expect(copiedError).toContain("本次重复连接已停止");
+        expect(
+          (
+            await pool.query("select session_id from agent_nodes where id=$1", [
+              config.node_id,
+            ])
+          ).rows[0].session_id,
+        ).toBe(firstSession);
+        const wrongCode = await service.createPairing(user, bootstrapRoom);
+        let mismatch = "";
+        // 替换已有 --code 参数后，不能静默复用第一位 Agent 的凭据。
+        const changed = [...flags];
+        changed[changed.indexOf("--code") + 1] = wrongCode.code;
+        try {
+          await run("bash", ["connect.sh", ...changed], bundleRoot);
+        } catch (error) {
+          mismatch = String(error);
+        }
+        expect(mismatch).toContain("另一个已配对 Agent");
+        expect(JSON.parse(await readFile(configFile, "utf8")).token).toBe(
+          config.token,
+        );
+        // 同一安装目录，新码省略 --config 时自动生成独立配置和身份。
+        const omit = new Set([
+          changed.indexOf("--config"),
+          changed.indexOf("--config") + 1,
+          changed.indexOf("--workspace"),
+          changed.indexOf("--workspace") + 1,
+        ]);
+        const secondFlags = changed.filter((_value, index) => !omit.has(index));
+        secondFlags[secondFlags.indexOf("--agent-name") + 1] =
+          "第二个自动连接 Agent";
+        const second = start(secondFlags);
+        await waitFor(
+          async () =>
+            (await service.state(user, bootstrapRoom)).seats.length === 2,
+          "同目录第二位 Agent 配对",
+        );
+        const automatic = resolve(
+          bundleRoot,
+          ".data/connections",
+          createHash("sha256")
+            .update(url + "\n" + wrongCode.code)
+            .digest("hex"),
+          "config.json",
+        );
+        const secondConfig = await waitFor(
+          async () =>
+            readFile(automatic, "utf8")
+              .then(JSON.parse)
+              .catch(() => null),
+          "独立配置保存",
+        );
+        expect(secondConfig.token).not.toBe(config.token);
+        expect(secondConfig.workspace).not.toBe(config.workspace);
+        await waitFor(
+          async () =>
+            readFile(automatic + ".status.json", "utf8")
+              .then((text) => JSON.parse(text).connected)
+              .catch(() => false),
+          "第二位 Agent 独立在线",
+        );
+        expect(
+          (
+            await pool.query("select session_id from agent_nodes where id=$1", [
+              config.node_id,
+            ])
+          ).rows[0].session_id,
+        ).toBe(firstSession);
+        second.kill("SIGTERM");
+        await once(second, "exit");
         child.kill("SIGTERM");
         await once(child, "exit");
-        child = start(["--config", configFile]);
+        await pool.query(
+          "update agent_pairings set expires_at=now()-interval '1 second' where id=$1",
+          [pairing.id],
+        );
+        child = start(flags);
         await waitFor(async () => {
           const node = (
             await pool.query("select session_id from agent_nodes where id=$1", [
@@ -379,7 +535,7 @@ describe.sequential(
           config.token,
         );
         expect((await service.state(user, bootstrapRoom)).seats).toHaveLength(
-          1,
+          2,
         );
       } finally {
         if (child && child.exitCode === null && child.signalCode === null) {
@@ -387,6 +543,110 @@ describe.sequential(
           await once(child, "exit");
         }
         await pool.query("delete from rooms where id=$1", [bootstrapRoom]);
+      }
+    }, 60000);
+    it("首次并发执行同一提示词只配对一次，进程崩溃后可从过期锁恢复原身份", async () => {
+      const concurrentRoom = (
+        await human("create_room", { name: "并发安装与恢复", icon: "🏝️" })
+      ).id;
+      const started: ChildProcess[] = [];
+      try {
+        const pairing = await service.createPairing(user, concurrentRoom);
+        const flags = [
+          "--non-interactive",
+          "--server",
+          url,
+          "--code",
+          pairing.code,
+          "--adapter",
+          "cli",
+          "--command",
+          process.execPath,
+          "--args",
+          JSON.stringify([resolve("tests/fixtures/local-agent.mjs")]),
+          "--name",
+          "并发设备",
+          "--agent-name",
+          "并发 Agent",
+        ];
+        const automatic = resolve(
+          bundleRoot,
+          ".data/connections",
+          createHash("sha256")
+            .update(url + "\n" + pairing.code)
+            .digest("hex"),
+          "config.json",
+        );
+        const launch = () => {
+          const child = spawn("bash", ["connect.sh", ...flags], {
+            cwd: bundleRoot,
+            env: {
+              ...process.env,
+              NODE_EXTRA_CA_CERTS: resolve(root, "cert.pem"),
+            },
+            stdio: ["ignore", "pipe", "pipe"],
+          });
+          started.push(child);
+          bootstrapChildren.push(child);
+          child.stdout.on("data", (b) => logs.push("Concurrent: " + b));
+          child.stderr.on("data", (b) => logs.push("Concurrent: " + b));
+          return child;
+        };
+        launch();
+        launch();
+        await waitFor(
+          async () =>
+            readFile(automatic + ".status.json", "utf8")
+              .then((text) => JSON.parse(text).connected)
+              .catch(() => false),
+          "首次并发启动连接",
+        );
+        await waitFor(
+          async () => started.some((child) => child.exitCode === 0),
+          "重复启动安全退出",
+        );
+        const config = JSON.parse(await readFile(automatic, "utf8"));
+        expect((await service.state(user, concurrentRoom)).seats).toHaveLength(
+          1,
+        );
+        const primary = started.find(
+          (child) => child.exitCode === null && child.signalCode === null,
+        )!;
+        const primaryExited = once(primary, "exit");
+        primary.kill("SIGKILL");
+        await primaryExited;
+        // 强制结束留下锁目录；模拟超过 30 秒，验证无需重复配对的恢复。
+        const old = new Date(Date.now() - 60000);
+        await utimes(automatic + ".lock", old, old);
+        await pool.query(
+          "update agent_pairings set expires_at=now()-interval '1 second' where id=$1",
+          [pairing.id],
+        );
+        const restored = launch();
+        await waitFor(
+          async () =>
+            readFile(automatic + ".status.json", "utf8")
+              .then((text) => {
+                const status = JSON.parse(text);
+                return status.connected && status.pid === restored.pid;
+              })
+              .catch(() => false),
+          "崩溃后复用凭据恢复",
+        );
+        expect(JSON.parse(await readFile(automatic, "utf8")).token).toBe(
+          config.token,
+        );
+        expect((await service.state(user, concurrentRoom)).seats).toHaveLength(
+          1,
+        );
+      } finally {
+        for (const child of started)
+          if (child.exitCode === null && child.signalCode === null) {
+            const exited = once(child, "exit");
+            child.kill("SIGTERM");
+            await exited;
+          }
+        await pool.query("delete from rooms where id=$1", [concurrentRoom]);
       }
     }, 60000);
     it("两个本地程序通过一次性配对和人类审批连接同一房间，断线自动重连而不重复回复", async () => {

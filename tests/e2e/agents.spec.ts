@@ -90,6 +90,10 @@ test("人类在联机席位审批两个真实 Node、选主持、确认文档、
       expect(prompt).toContain(`${baseURL}/api/agent-node/client`);
       expect(prompt).toContain(code);
       expect(prompt).toContain("--non-interactive");
+      expect(prompt).toContain(
+        "同一条提示词重复执行必须复用此目录、配置和身份",
+      );
+      expect(prompt).toContain("不下载、不重装、不重新配对");
       expect(prompt).toContain(i ? "--allow-development" : "--no-development");
       await expect
         .poll(() => page.evaluate(() => navigator.clipboard.readText()))
@@ -151,7 +155,7 @@ test("人类在联机席位审批两个真实 Node、选主持、确认文档、
       await expect(
         panel
           .getByLabel(name + " 的联机席位")
-          .getByText("在线，等待授权", { exact: true }),
+          .getByText("已批准，等待点名或任务", { exact: true }),
       ).toBeVisible();
     }
     await page

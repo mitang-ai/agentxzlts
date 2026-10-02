@@ -8,7 +8,7 @@ import {
   unlink,
   realpath,
 } from "node:fs/promises";
-import { resolve, relative, dirname } from "node:path";
+import { resolve, relative, dirname, basename } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
   readArchive,
@@ -24,6 +24,7 @@ import {
 } from "../../agents/protocol.mjs";
 import { createAdapter, runProcess } from "./adapters.mjs";
 import { readJSON, writeJSON, serverURL } from "./io.mjs";
+import { acquireInstance } from "./instances.mjs";
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const ignored = (path) =>
   path
@@ -67,20 +68,33 @@ export async function walkWorkspace(directory) {
   return files;
 }
 export class IslandNode {
-  constructor(config, { configFile, logger = console.log, onJob } = {}) {
+  constructor(
+    config,
+    { configFile, logger = console.log, onJob, instanceLease } = {},
+  ) {
     this.config = config;
     this.server = serverURL(config.server);
     this.configFile = configFile;
     this.logger = logger;
     this.onJob = onJob;
+    this.instanceLease = instanceLease;
     this.adapter = createAdapter(config);
     this.pending = new Map();
     this.stopped = false;
     this.active = null;
     this.cursor = 0;
     this.retry = 500;
-    this.privateDir = resolve(dirname(configFile), "state");
+    this.privateDir = resolve(
+      dirname(configFile),
+      basename(configFile) + ".state",
+    );
     this.spool = resolve(this.privateDir, "active.json");
+    this.connectionStatus = {
+      state: "pending",
+      muted: false,
+      connected: false,
+    };
+    this.statusQueue = Promise.resolve();
   }
   log(message) {
     this.logger(message);
@@ -118,13 +132,74 @@ export class IslandNode {
       this.ws.send(JSON.stringify({ type, data, request_id: requestId }));
     });
   }
+  async updateStatus(data = {}) {
+    const before = this.connectionStatus;
+    this.connectionStatus = {
+      ...before,
+      ...data,
+      pid: process.pid,
+      running: !this.stopped,
+      activity: this.active?.job?.kind || "idle",
+      updated_at: new Date().toISOString(),
+    };
+    if (
+      data.connected &&
+      (before.connected !== true ||
+        before.state !== this.connectionStatus.state ||
+        before.muted !== this.connectionStatus.muted)
+    ) {
+      this.log(
+        this.connectionStatus.state === "pending"
+          ? "设备已连接，等待人类房间管理者批准席位。"
+          : this.connectionStatus.muted
+            ? "联机席位已批准，但已静音，等待管理者解除静音。"
+            : "联机席位已批准，等待点名或任务；本机开发仍须任务批准。",
+      );
+    }
+    const snapshot = { ...this.connectionStatus };
+    this.statusQueue = this.statusQueue
+      .catch(() => {})
+      .then(() => writeJSON(this.configFile + ".status.json", snapshot));
+    await this.statusQueue;
+  }
   async start() {
+    const lease =
+      this.instanceLease ||
+      (await acquireInstance(this.configFile, () => {
+        this.log("实例锁失效，停止客户端以防重复执行。");
+        this.stop();
+      }));
+    try {
+      await this.run();
+      if (this.connectionConflict)
+        throw Error(
+          "此席位已有在线客户端，本次重复连接已停止；新增 Agent 请使用新配对码和独立配置。",
+        );
+    } finally {
+      this.stopped = true;
+      await this.updateStatus({ connected: false }).catch(() => {});
+      if (!this.instanceLease) await lease.release().catch(() => {});
+    }
+  }
+  async run() {
     const cursor = await readJSON(resolve(this.privateDir, "cursor.json"), {
       cursor: 0,
     });
     this.cursor = Number.isSafeInteger(cursor.cursor) ? cursor.cursor : 0;
     this.savedCursor = this.cursor;
-    const record = await readJSON(this.spool);
+    let record = await readJSON(this.spool);
+    if (!record && this.config.participant_id) {
+      const legacy = await readJSON(
+        resolve(dirname(this.configFile), "state/active.json"),
+      );
+      if (legacy?.job?.participant_id === this.config.participant_id) {
+        record = legacy;
+        await writeJSON(this.spool, record);
+        await unlink(
+          resolve(dirname(this.configFile), "state/active.json"),
+        ).catch(() => {});
+      }
+    }
     if (record?.job) {
       this.active = record;
       this.log(
@@ -178,15 +253,18 @@ export class IslandNode {
         if (packet.type === "welcome") {
           welcomed = true;
           this.retry = 500;
-          this.log(
-            "设备连接成功" +
-              (packet.data.state === "pending"
-                ? "，等待人类房间管理者批准。"
-                : "，等待明确点名或任务。"),
+          void this.updateStatus({ ...packet.data, connected: true }).catch(
+            () => this.log("本机连接状态暂时无法保存。"),
           );
           poll = setInterval(() => void this.tick(), 2000);
           void this.tick();
         } else if (packet.type === "sync") {
+          void this.updateStatus({
+            state: packet.data.state,
+            muted: packet.data.muted,
+            connected: true,
+            last_sync_at: new Date().toISOString(),
+          }).catch(() => this.log("本机连接状态暂时无法保存。"));
           this.cursor = Math.max(this.cursor, packet.data.cursor || 0);
           if (
             packet.data.cancelled &&
@@ -203,6 +281,11 @@ export class IslandNode {
         }
       });
       ws.on("unexpected-response", (request, response) => {
+        if (response.statusCode === 409) {
+          this.connectionConflict = true;
+          this.log("此席位已有在线客户端，保留原连接，本次不抢占、不重试。");
+          this.stop();
+        }
         if ([401, 403].includes(response.statusCode)) {
           this.log("设备凭据无效或已撤销，需要重新配对。");
           this.stop();
@@ -211,7 +294,13 @@ export class IslandNode {
         reject(Error("Gateway 连接被拒绝：" + response.statusCode));
       });
       ws.once("error", reject);
-      ws.on("close", () => {
+      ws.on("close", (code) => {
+        if (code === 4001) {
+          this.connectionConflict = true;
+          this.log("连接身份重复，本次停止重连，避免互相顶掉连接。");
+          this.stop();
+        }
+        void this.updateStatus({ connected: false }).catch(() => {});
         clearInterval(poll);
         for (const p of this.pending.values()) {
           clearTimeout(p.timer);
@@ -233,6 +322,12 @@ export class IslandNode {
         active: this.active
           ? { id: this.active.job.id, lease: this.active.job.lease }
           : null,
+      });
+      await this.updateStatus({
+        state: state.state,
+        muted: state.muted,
+        connected: true,
+        last_sync_at: new Date().toISOString(),
       });
       this.cursor = Math.max(this.cursor, state.cursor || 0);
       if (this.cursor !== this.savedCursor) {

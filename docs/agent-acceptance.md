@@ -28,6 +28,16 @@ Windows 下载包的 PowerShell 脚本与 README 使用带 BOM 的 UTF-8，CMD �
 
 `npx vitest run tests/node-integration.test.ts`：8 项通过。实际 HTTPS 下载的 ZIP 验证 UTF-8 严格解码、编码标识、中文原文及启动参数；独立安装、非交互连接、重连、协作开发与回传合并继续通过。生产构建及类型检查通过。当前环境为 Linux，未将编码文件验证称为 Windows 实机验收。
 
+## 席位审批、实例隔离与重复启动修复验收
+
+已批准的空闲席位显示「已批准，等待点名或任务」，本机终端与 status 同步审批/静音状态。不同配对码自动使用独立配置、工作目录与任务状态；显式复用其他 Agent 配置会拒绝覆盖。跨进程锁阻止同一配置重复配对和启动，Gateway 拒绝重复凭据连接并保留原 session。
+
+- `npx vitest run tests/agents.test.ts tests/node-integration.test.ts tests/adapters.test.ts`：30 项通过。真实 HTTPS 下载及独立安装、审批后状态同步、同安装目录内两个 Agent 同时在线、重复 bootstrap 无新增席位、复制凭据客户端遇到 409 后停止且原连接保持、首次并发启动只产生一个席位、配对码过期后复用原凭据恢复、原协作开发/回传流程通过。
+- 强制终止进程后恢复测试实际使用 SIGKILL，并将遗留锁的修改时间设为过期以模拟 30 秒等待；恢复保留原凭据与席位。本次未以模拟时间代替 Windows/macOS 实机验证。
+- `E2E_BASE_URL=http://localhost:3100 npx playwright test tests/e2e/agents.spec.ts`：1 项完整浏览器流程通过，验证审批显示、可重复执行提示词与桌面/手机协作流程。类型检查、生产构建通过，生产依赖审计为 0 漏洞。
+
+提示词按配对标识固定用户主目录中的安装位置，已配对时优先查询并恢复已有配置，不重新下载或配对。升级前先停止旧版客户端、保留 `.data`；旧版配置用 `start --config 原路径` 恢复。
+
 ## 实际联机与开发证据
 
 两个独立 OS 进程通过真实 HTTPS/WSS 连接独立 Gateway 服务（真实 PostgreSQL、私有磁盘文件、可信测试证书，未关闭 TLS 校验）。设备各有独立配置和工作目录。测试断线后设备建立新 session，事件/任务不重复产生回应。

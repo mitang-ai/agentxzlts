@@ -293,16 +293,18 @@ export class AgentService {
         room_id: s.room_id,
         participant_id: s.participant_id,
         state: s.state,
+        muted: s.muted,
       };
     });
   }
   async disconnected(token, sessionId) {
     return this.transaction(async (db) => {
       const n = await this.node(db, token, { sessionId });
-      await db.query(
-        "update agent_nodes set last_seen_at=null,session_id=null where id=$1 and session_id=$2",
+      const cleared = await db.query(
+        "update agent_nodes set last_seen_at=null,session_id=null where id=$1 and session_id=$2 returning id",
         [n.id, sessionId],
       );
+      if (!cleared.rowCount) return;
       const s = (
         await db.query(
           "select p.id,p.room_id from agent_seats s join participants p on p.id=s.participant_id where node_id=$1",

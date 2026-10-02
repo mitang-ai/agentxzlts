@@ -18,6 +18,7 @@ export function attachGateway(server, pool, storage, env = process.env) {
       perMessageDeflate: false,
     });
   const peers = new Map(),
+    connecting = new Set(),
     rates = new Map();
   let sweeping = false;
   function sourceIP(req) {
@@ -178,14 +179,23 @@ export function attachGateway(server, pool, storage, env = process.env) {
       return false;
     }
     if (path !== "/agent-wire") return false;
+    let reservedToken;
     try {
       if (!originAllowed(req)) throw new AgentError(403, "Node 请求来源无效。");
       await checkIP(sourceIP(req));
-      const token = tokenFor(req),
-        connection = await service.connect(token);
+      const token = tokenFor(req);
+      if (
+        connecting.has(token) ||
+        [...peers.values()].some(
+          (peer) =>
+            peer.token === token && peer.ws.readyState !== WebSocket.CLOSED,
+        )
+      )
+        throw new AgentError(409, "此席位已有在线客户端，不能抢占连接。");
+      connecting.add(token);
+      reservedToken = token;
+      const connection = await service.connect(token);
       wss.handleUpgrade(req, socket, head, (ws) => {
-        const previous = peers.get(connection.node_id);
-        previous?.ws.close(4001, "设备建立了新连接");
         const peer = {
           ws,
           token,
@@ -310,9 +320,11 @@ export function attachGateway(server, pool, storage, env = process.env) {
       });
     } catch (e) {
       socket.write(
-        `HTTP/1.1 ${e.status || 503} ${e.status ? "Forbidden" : "Service Unavailable"}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`,
+        `HTTP/1.1 ${e.status || 503} ${e.status === 409 ? "Conflict" : e.status ? "Forbidden" : "Service Unavailable"}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`,
       );
       socket.destroy();
+    } finally {
+      if (reservedToken) connecting.delete(reservedToken);
     }
     return true;
   }

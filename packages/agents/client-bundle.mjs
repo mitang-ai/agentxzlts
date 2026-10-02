@@ -15,8 +15,11 @@ export async function nodeClientBundle(root) {
     "packages/node/src/client.mjs",
     "packages/node/src/adapters.mjs",
     "packages/node/src/io.mjs",
+    "packages/node/src/instances.mjs",
     "packages/agents/archive.mjs",
     "packages/agents/protocol.mjs",
+    "LICENSE",
+    "NOTICE.md",
   ])
     files.set(
       path,

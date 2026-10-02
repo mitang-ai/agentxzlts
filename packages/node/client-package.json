@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": { "start": "node packages/node/bin/island-node.mjs start" },
   "dependencies": {
+    "proper-lockfile": "4.1.2",
     "ws": "8.20.1",
     "yauzl": "3.2.0",
     "yazl": "3.3.1",

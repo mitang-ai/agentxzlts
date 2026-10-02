@@ -26,14 +26,16 @@ function connectionPrompt(origin: string, pairing: Row, development: boolean) {
   return (
     [
       `请在你所在的设备自动安装并连接协作岛房间`,
+      `本次安装标识为 ${pairing.id}，以当前操作系统用户的主目录为基准，固定使用 .island-node/clients/${pairing.id} 作为专用安装目录，同一条提示词重复执行必须复用此目录、配置和身份，不能创建第二份安装或新的席位`,
       `先检测操作系统和本机可用且已登录的 Agent，优先使用你当前所用的 Codex、Claude Code 或 OpenCode`,
-      `向 ${origin}/api/agent-node/client 发送 POST 请求（Content-Type: application/json，请求体 ${JSON.stringify({ code: pairing.code })}）下载客户端 ZIP，无需网页登录，配对码只放请求体`,
-      `将客户端解压到新的专用目录，在该目录运行 Windows 的 connect.cmd 或 Linux/macOS 的 bash connect.sh，启动程序会自动准备 Node.js 22+、npm 和客户端依赖`,
+      `首先检查此专用目录里的 ${JSON.stringify(`.data/connections/${pairing.id}/config.json`)}；若已配对，用已安装的 Node.js 执行 packages/node/bin/island-node.mjs status --config 查看状态，已运行时只报告现有连接，未运行时用同一配置 start，不下载、不重装、不重新配对，配对码过期或已使用也不影响已保存身份的恢复`,
+      `仅在尚未安装时，向 ${origin}/api/agent-node/client 发送 POST 请求（Content-Type: application/json，请求体 ${JSON.stringify({ code: pairing.code })}）下载客户端 ZIP，无需网页登录，配对码只放请求体，解压到上述固定目录，已有运行中的安装不得覆盖`,
+      `首次配置时在该目录运行 Windows 的 connect.cmd 或 Linux/macOS 的 bash connect.sh，启动程序会自动准备 Node.js 22+、npm 和客户端依赖`,
       `给启动程序传入 --non-interactive --server ${JSON.stringify(origin)} --code ${JSON.stringify(pairing.code)} --config ${JSON.stringify(`.data/connections/${pairing.id}/config.json`)} --adapter 本机Agent类型 --workspace 专用工作目录的绝对路径 --name 设备名称 --agent-name 你的昵称 ${development ? "--allow-development" : "--no-development"}，占位参数请根据本机情况填写真实值`,
       development
         ? `我授权你在上述专用工作目录下的隔离子目录开发，请检测并准备 Git，收到聊天室批准的任务后再执行开发`
         : `本次仅授权联机讨论，本机开发保持关闭`,
-      `配对码有效至 ${new Date(pairing.expires_at).toISOString()} 且只能配对一次，首次连接成功后保持客户端在后台运行并保存进程号和日志；重新启动使用同一配置的 start 命令，不要重复配对`,
+      `配对码有效至 ${new Date(pairing.expires_at).toISOString()} 且只能首次配对一次，客户端会阻止同一配置重复启动；首次连接成功后保持客户端在后台运行并保存进程号和日志，不得复制其他 Agent 的配置、凭据或工作目录，不得终止其他 Agent 的进程`,
       `加入后等待人类管理者审批及点名，最后报告连接状态、日志位置、重新启动和停止方法；若设备无法访问网站、没有可用的已登录 Agent、或配对码失效，请明确报告原因`,
     ].join("；") + "。"
   );
@@ -296,8 +298,8 @@ export default function ConnectionPanel({
                 onFocus={(event) => event.target.select()}
               />
               <small>
-                提示词含一次性配对码，有效期 10
-                分钟，仅交给你要连接的设备；用过后重新生成。
+                提示词含一次性配对码，有效期 10 分钟，仅交给你要连接的设备；同一
+                Agent 重复执行复用配置，新增 Agent 才生成新提示词。
               </small>
             </label>
           )}
@@ -379,7 +381,7 @@ export default function ConnectionPanel({
                             : !online
                               ? "设备离线"
                               : s.activity === "idle"
-                                ? "在线，等待授权"
+                                ? "已批准，等待点名或任务"
                                 : turnNames[s.activity] || "在线"}
                   </span>
                 </div>

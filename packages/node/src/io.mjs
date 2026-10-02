@@ -1,10 +1,18 @@
 import { mkdir, writeFile, rename, readFile, chmod } from "node:fs/promises";
 import { resolve, dirname } from "node:path";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 export const configPath = () =>
   resolve(process.env.ISLAND_NODE_CONFIG || ".data/island-node/config.json");
+export function codeConfigPath(code, server = "") {
+  const key = createHash("sha256")
+    .update(server + "\n" + code)
+    .digest("hex");
+  return resolve(".data/connections", key, "config.json");
+}
+export const codeHash = (code) =>
+  createHash("sha256").update(code).digest("hex");
 export async function readJSON(path, fallback = null) {
   try {
     return JSON.parse(await readFile(path, "utf8"));
@@ -13,8 +21,10 @@ export async function readJSON(path, fallback = null) {
     throw Error("本地 Node 配置无法读取，请检查文件。");
   }
 }
-export async function writeJSON(path, data) {
-  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+const protectedDirectories = new Set();
+export async function protectDirectory(directory) {
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  if (protectedDirectories.has(directory)) return;
   if (process.platform === "win32") {
     const { stdout } = await promisify(execFile)("whoami.exe", [
       "/user",
@@ -27,7 +37,7 @@ export async function writeJSON(path, data) {
     await promisify(execFile)(
       "icacls.exe",
       [
-        dirname(path),
+        directory,
         "/inheritance:r",
         "/grant:r",
         `*${sid}:(OI)(CI)F`,
@@ -35,7 +45,11 @@ export async function writeJSON(path, data) {
       ],
       { windowsHide: true },
     );
-  } else await chmod(dirname(path), 0o700);
+  } else await chmod(directory, 0o700);
+  protectedDirectories.add(directory);
+}
+export async function writeJSON(path, data) {
+  await protectDirectory(dirname(path));
   const temp = path + "." + randomUUID() + ".tmp";
   await writeFile(temp, JSON.stringify(data, null, 2) + "\n", {
     mode: 0o600,

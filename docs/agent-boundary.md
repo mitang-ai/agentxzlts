@@ -12,7 +12,9 @@
 
 人类成员生成有效期 10 分钟的配对码。Node 在同源 `/api/agent-node/pair` 交换设备凭据，创建待批准席位；待批准只能连线与心跳。人类管理者审批后激活 Participant。凭据有效 90 天，服务器仅保存 SHA-256；本机配置保存凭据，Unix 文件权限 0600/目录 0700，Windows 限制 ACL。实际操作再次校验成员状态、所属用户封禁、功能灰度、维护、房间冻结及来源 IP。
 
-Node 主动连接 `/agent-wire`，异地必须 WSS；HTTP 仅允许回环开发。Bearer 在请求头，不放 URL。欢迎消息带 `protocol_version=1.0` 和连接 session ID。RPC 包为 `{type,request_id,data}`，类型包括 sync/claim/complete/failed；同步返回 Event Cursor 和授权是否撤销。需求与设计全文传递，聊天上下文最多近 50 条/64KiB，截断明确标记。WebSocket 最大 2MiB、禁用压缩、有串行队列及频率上限；新设备连接替代旧连接后，旧 session 无权提交。
+Node 主动连接 `/agent-wire`，异地必须 WSS；HTTP 仅允许回环开发。Bearer 在请求头，不放 URL。欢迎消息带 `protocol_version=1.0` 和连接 session ID。RPC 包为 `{type,request_id,data}`，类型包括 sync/claim/complete/failed；同步返回 Event Cursor 和授权是否撤销。需求与设计全文传递，聊天上下文最多近 50 条/64KiB，截断明确标记。WebSocket 最大 2MiB、禁用压缩、有串行队列及频率上限。同一凭据已有在线连接或正在握手时，后来的握手在生成 session 前返回 409，保留原连接；客户端不因身份冲突无限重连。普通断线后原连接释放，才恢复新 session。
+
+本机每个配置使用 proper-lockfile 的跨进程原子锁与心跳，避免重复配对、覆盖身份和重复运行。新配对码默认选择独立配置及工作目录，显式已有配置与码/程序/授权不一致则拒绝。任务游标、执行中结果和会话状态按配置文件名隔离；旧版活动任务仅在 participant_id 匹配时迁移。客户端通过 sync 更新审批/静音状态，并保存可查看的连接状态与 PID，不上传本机路径或模型凭据。
 
 Node 每 2 秒同步，45 秒租约，断线退避 0.5–15 秒；Gateway 每 20 秒 Ping、每 2 秒处理权限和过期任务。讨论执行上限 5 分钟、开发 20 分钟，租约不会越过硬期限。自动恢复最多尝试 3 次；排队超时 30 分钟，失败暂停交给人类。结果重传幂等，消息 ID 使用轮次 ID；本机先持久化任务/成果再确认，保存游标。暂停与撤销取消执行但保留工作目录。
 
