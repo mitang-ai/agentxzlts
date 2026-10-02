@@ -47,7 +47,11 @@ beforeAll(async () => {
   await mkdir(cwd);
   await mkdir(resolve(root, "outside"));
   await writeFile(resolve(root, "outside/private.txt"), "private");
-  await symlink(resolve(root, "outside"), resolve(cwd, "escape"));
+  await symlink(
+    resolve(root, "outside"),
+    resolve(cwd, "escape"),
+    process.platform === "win32" ? "junction" : "dir",
+  );
 });
 afterAll(async () => {
   await rm(root, { recursive: true, force: true });

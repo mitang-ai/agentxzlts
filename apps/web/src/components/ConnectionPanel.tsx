@@ -1,8 +1,9 @@
 "use client";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Bot,
   Monitor,
+  Trash2,
   Plus,
   Copy,
   Download,
@@ -22,6 +23,62 @@ import type { RoomState } from "@island/protocol";
 import { api, size } from "@/lib/client";
 import "./connections.css";
 type Row = Record<string, any>;
+function BriefFiles({
+  title,
+  ids,
+  files,
+  disabled,
+  upload,
+  remove,
+}: {
+  title: string;
+  ids: string[];
+  files: RoomState["files"];
+  disabled: boolean;
+  upload: (files: File[]) => Promise<void>;
+  remove: (id: string) => void;
+}) {
+  return (
+    <div className="brief-files">
+      <label className="connection-upload">
+        上传{title}文件
+        <input
+          type="file"
+          multiple
+          accept=".txt,.md,.docx,.pdf"
+          aria-label={`上传${title}文件`}
+          disabled={disabled}
+          onChange={(event) => {
+            const chosen = Array.from(event.target.files || []);
+            event.target.value = "";
+            void upload(chosen);
+          }}
+        />
+      </label>
+      <small>
+        支持
+        TXT、Markdown、Word（.docx）、PDF，可多选；上传文件后正文可不填。原文件随版本发送给
+        Agent。
+      </small>
+      {ids.map((id) => (
+        <div className="brief-file" key={id}>
+          <a href={`/api/files/${id}`}>
+            {files.find((file) => file.id === id)?.name || "已上传文档"}
+          </a>
+          <button
+            type="button"
+            className="text-button"
+            disabled={disabled}
+            aria-label={`移除${title}文件 ${files.find((file) => file.id === id)?.name || id}`}
+            onClick={() => remove(id)}
+          >
+            移除
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
 function connectionPrompt(origin: string, pairing: Row, development: boolean) {
   return (
     [
@@ -85,6 +142,8 @@ export default function ConnectionPanel({
     [design, setDesign] = useState(""),
     [baseId, setBaseId] = useState(""),
     [docs, setDocs] = useState<string[]>([]),
+    [requirementsFiles, setRequirementsFiles] = useState<string[]>([]),
+    [designFiles, setDesignFiles] = useState<string[]>([]),
     [selected, setSelected] = useState<string[]>([]),
     [draft, setDraft] = useState<Row[]>([]),
     [approved, setApproved] = useState(false),
@@ -92,6 +151,20 @@ export default function ConnectionPanel({
     [preview, setPreview] = useState<Row | null>(null),
     [resolutions, setResolutions] = useState<Record<string, string>>({}),
     [mergeConfirmed, setMergeConfirmed] = useState(false);
+  const copying = useRef(false);
+  const removeInvitations = async (input: Row) => {
+    if (
+      !window.confirm(
+        "删除后，此前复制但尚未使用的连接提示词将失效。已连接的 Agent 不受影响，确定删除吗？",
+      )
+    )
+      return;
+    const result = await request("delete-pairings", input);
+    if (result) {
+      if (pairing && result.deleted_ids.includes(pairing.id)) setPairing(null);
+      notify("未使用的邀请码已删除，现在可以复制新提示词。");
+    }
+  };
   const refresh = useCallback(async () => {
     try {
       setData(await api<Row>(`rooms/${roomId}/agents`));
@@ -126,6 +199,8 @@ export default function ConnectionPanel({
       setDesign(data.brief.design);
       setBaseId(data.brief.base_file_id || "");
       setDocs(data.brief.file_ids || []);
+      setRequirementsFiles(data.brief.requirements_file_ids || []);
+      setDesignFiles(data.brief.design_file_ids || []);
     }
   }, [data?.brief?.id]);
   useEffect(() => {
@@ -157,6 +232,9 @@ export default function ConnectionPanel({
   const activeSeats = (data?.seats || []).filter(
     (s: Row) => s.state === "approved" && !s.muted,
   );
+  const removableSeats = (data?.seats || []).filter((s: Row) =>
+    ["rejected", "revoked"].includes(s.state),
+  );
   const session = data?.session,
     brief = data?.brief,
     manager = Boolean(data?.manager);
@@ -180,6 +258,58 @@ export default function ConnectionPanel({
       setBusy(false);
     }
   };
+  const uploadDocuments = async (
+    files: File[],
+    category: "requirements" | "design",
+  ) => {
+    if (!files.length || busy || !editable) return;
+    const chosenIds = [
+      ...new Set([...docs, ...requirementsFiles, ...designFiles]),
+    ];
+    if (chosenIds.length + files.length > 20) {
+      setError("需求与设计最多关联 20 个文件，请先移除部分附件。");
+      return;
+    }
+    if (files.some((file) => !/\.(txt|md|docx|pdf)$/i.test(file.name))) {
+      setError("请选择 TXT、Markdown、Word（.docx）或 PDF 文档。");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    let uploaded = 0;
+    try {
+      for (const file of files) {
+        const form = new FormData();
+        // Windows 对 Markdown 等文件可能不提供 MIME；按已允许的扩展名补全。
+        const mime = (
+          {
+            txt: "text/plain",
+            md: "text/markdown",
+            pdf: "application/pdf",
+            docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          } as Record<string, string>
+        )[file.name.split(".").pop()!.toLowerCase()];
+        form.append("file", new File([file], file.name, { type: mime }));
+        const result = await api<{ id: string }>(`rooms/${roomId}/files`, form);
+        const setFiles =
+          category === "requirements" ? setRequirementsFiles : setDesignFiles;
+        setFiles((current) => [...current, result.id]);
+        uploaded++;
+      }
+      notify(`已上传 ${uploaded} 个文件，请发布需求与设计版本。`);
+    } catch (e) {
+      setError(
+        `${(e as Error).message}${uploaded ? `；前 ${uploaded} 个文件已保留，可继续上传剩余文件。` : ""}`,
+      );
+    } finally {
+      try {
+        await onChanged();
+      } catch (e) {
+        setError((e as Error).message);
+      }
+      setBusy(false);
+    }
+  };
   const updatePlan = (index: number, key: string, value: any) =>
     setDraft(
       draft.map((row, i) => (i === index ? { ...row, [key]: value } : row)),
@@ -197,16 +327,25 @@ export default function ConnectionPanel({
     }
   };
   const copyConnectionPrompt = async () => {
-    let current = pairing;
-    if (!current || new Date(current.expires_at).getTime() <= Date.now()) {
-      current = await request("pairing");
+    if (copying.current || busy) return;
+    copying.current = true;
+    setBusy(true);
+    setError("");
+    try {
+      const current = await api<Row>(`rooms/${roomId}/agents/pairing`, {});
       if (!current) return;
       setPairing(current);
+      await copyText(
+        connectionPrompt(window.location.origin, current, promptDevelopment),
+        "新的连接提示词已复制，直接交给要连接的 Agent。",
+      );
+      await refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      copying.current = false;
+      setBusy(false);
     }
-    await copyText(
-      connectionPrompt(window.location.origin, current, promptDevelopment),
-      "一键连接提示词已复制，交给 Agent 所在设备上的 Agent 即可。",
-    );
   };
   if (!data)
     return (
@@ -241,6 +380,7 @@ export default function ConnectionPanel({
           <p>
             复制一键连接提示词，交给另一台设备上的
             Agent，它会自行下载、安装并申请加入房间，随后等待人类管理者批准。
+            每次复制都会生成独立连接，连接下一个 Agent 时再次点击复制即可。
           </p>
           <label className="connection-check">
             <input
@@ -275,17 +415,6 @@ export default function ConnectionPanel({
               <Download size={15} />
               下载 Node 客户端
             </a>
-            <button
-              className="secondary compact"
-              disabled={busy || !state.capabilities?.agents}
-              onClick={async () => {
-                const result = await request("pairing");
-                if (result) setPairing(result);
-              }}
-            >
-              <Plus size={15} />
-              生成设备配对码
-            </button>
           </div>
           {prompt && (
             <label>
@@ -298,8 +427,8 @@ export default function ConnectionPanel({
                 onFocus={(event) => event.target.select()}
               />
               <small>
-                提示词含一次性配对码，有效期 10 分钟，仅交给你要连接的设备；同一
-                Agent 重复执行复用配置，新增 Agent 才生成新提示词。
+                每次复制自动生成新配对码，有效期 10 分钟。每份提示词只交给一个
+                Agent；该 Agent 重连时使用它原来保存的提示词。
               </small>
             </label>
           )}
@@ -333,6 +462,66 @@ export default function ConnectionPanel({
               撤销此码
             </button>
           </div>
+        </div>
+      )}
+      <section className="connection-invitations" aria-label="我的待连接邀请">
+        <div className="connection-actions">
+          <strong>我的待连接邀请（{data?.my_pairings?.length || 0}/5）</strong>
+          <button
+            className="text-button"
+            disabled={busy || !data?.my_pairings?.length}
+            onClick={() => void removeInvitations({ all: true })}
+          >
+            一键删除未使用邀请
+          </button>
+        </div>
+        <small>
+          包含你在各房间创建的有效邀请码。刷新后仍可管理；这里只显示邀请记录，不保存或回显旧码明文。删除不会移除已连接设备。
+        </small>
+        {!data?.my_pairings?.length && <p>暂无待连接邀请</p>}
+        {data?.my_pairings?.map((item: Row) => (
+          <div
+            className="connection-invitation"
+            key={item.id}
+            aria-label={`待连接邀请 ${item.id}`}
+          >
+            <div>
+              <strong>{item.room_name}</strong>
+              <small>
+                邀请 {item.id.slice(0, 8)} · 创建于{" "}
+                {new Date(item.created_at).toLocaleTimeString("zh-CN")} · 到期{" "}
+                {new Date(item.expires_at).toLocaleTimeString("zh-CN")}
+              </small>
+            </div>
+            <button
+              className="text-button"
+              disabled={busy}
+              aria-label={`删除邀请码 ${item.id}`}
+              onClick={() => void removeInvitations({ pairing_ids: [item.id] })}
+            >
+              删除
+            </button>
+          </div>
+        ))}
+      </section>
+      {manager && removableSeats.length > 0 && (
+        <div className="connection-actions seat-cleanup">
+          <span>已撤销或拒绝的记录：{removableSeats.length}</span>
+          <button
+            className="danger-text"
+            disabled={busy}
+            onClick={() => {
+              if (
+                window.confirm(
+                  "删除全部已撤销或拒绝的 Agent 记录？不会影响已批准的 Agent，也不会删除聊天和任务历史。",
+                )
+              )
+                void request("delete-seats", { all: true });
+            }}
+          >
+            <Trash2 size={14} />
+            一键删除失效记录
+          </button>
         </div>
       )}
       {data.seats.length ? (
@@ -465,7 +654,26 @@ export default function ConnectionPanel({
                           撤销
                         </button>
                       </>
-                    ) : null}
+                    ) : (
+                      <button
+                        className="danger-text"
+                        disabled={busy}
+                        aria-label={`删除 ${s.display_name} 的记录`}
+                        onClick={() => {
+                          if (
+                            window.confirm(
+                              `删除 ${s.display_name} 的联机记录？聊天和任务历史会保留。`,
+                            )
+                          )
+                            void request("delete-seats", {
+                              participant_id: s.participant_id,
+                            });
+                        }}
+                      >
+                        <Trash2 size={14} />
+                        删除记录
+                      </button>
+                    )}
                   </div>
                 )}
               </article>
@@ -503,19 +711,40 @@ export default function ConnectionPanel({
                 阅读当前需求与设计
               </summary>
               <h3>开发需求</h3>
-              <p className="brief-text">{brief.requirements}</p>
+              <p className="brief-text">
+                {brief.requirements || "以需求附件为准"}
+              </p>
+              {(brief.requirements_file_ids || []).map((id: string) => (
+                <a className="brief-file" key={id} href={`/api/files/${id}`}>
+                  {state.files.find((f) => f.id === id)?.name || "需求附件"}
+                </a>
+              ))}
               <h3>设计文档</h3>
-              <p className="brief-text">{brief.design}</p>
+              <p className="brief-text">{brief.design || "以设计附件为准"}</p>
+              {(brief.design_file_ids || []).map((id: string) => (
+                <a className="brief-file" key={id} href={`/api/files/${id}`}>
+                  {state.files.find((f) => f.id === id)?.name || "设计附件"}
+                </a>
+              ))}
               <div className="connection-actions">
-                {brief.file_ids.map((fid: string) => (
-                  <a
-                    className="text-button"
-                    href={`/api/files/${fid}`}
-                    key={fid}
-                  >
-                    {state.files.find((f) => f.id === fid)?.name || "附加文档"}
-                  </a>
-                ))}
+                {brief.file_ids
+                  .filter(
+                    (fid: string) =>
+                      ![
+                        ...(brief.requirements_file_ids || []),
+                        ...(brief.design_file_ids || []),
+                      ].includes(fid),
+                  )
+                  .map((fid: string) => (
+                    <a
+                      className="text-button"
+                      href={`/api/files/${fid}`}
+                      key={fid}
+                    >
+                      {state.files.find((f) => f.id === fid)?.name ||
+                        "附加文档"}
+                    </a>
+                  ))}
               </div>
             </details>
             {!data.acks.some((a: Row) => a.participant_id === data.me) && (
@@ -543,6 +772,8 @@ export default function ConnectionPanel({
                   requirements,
                   design,
                   file_ids: docs,
+                  requirements_file_ids: requirementsFiles,
+                  design_file_ids: designFiles,
                   base_file_id: baseId || null,
                 });
                 if (result) notify("需求与设计版本已发布。");
@@ -554,24 +785,50 @@ export default function ConnectionPanel({
                   aria-label="开发需求"
                   rows={5}
                   maxLength={32000}
-                  required
+                  required={!requirementsFiles.length}
                   value={requirements}
                   onChange={(e) => setRequirements(e.target.value)}
-                  disabled={!editable}
+                  disabled={busy || !editable}
                 />
               </label>
+              <BriefFiles
+                title="开发需求"
+                ids={requirementsFiles}
+                files={state.files}
+                disabled={busy || !editable}
+                upload={(files) => uploadDocuments(files, "requirements")}
+                remove={(id) => {
+                  setRequirementsFiles((current) =>
+                    current.filter((fid) => fid !== id),
+                  );
+                  setDocs((current) => current.filter((fid) => fid !== id));
+                }}
+              />
               <label>
                 设计文档
                 <textarea
                   aria-label="设计文档"
                   rows={5}
                   maxLength={32000}
-                  required
+                  required={!designFiles.length}
                   value={design}
                   onChange={(e) => setDesign(e.target.value)}
-                  disabled={!editable}
+                  disabled={busy || !editable}
                 />
               </label>
+              <BriefFiles
+                title="设计文档"
+                ids={designFiles}
+                files={state.files}
+                disabled={busy || !editable}
+                upload={(files) => uploadDocuments(files, "design")}
+                remove={(id) => {
+                  setDesignFiles((current) =>
+                    current.filter((fid) => fid !== id),
+                  );
+                  setDocs((current) => current.filter((fid) => fid !== id));
+                }}
+              />
               <label>
                 代码基线
                 <select
@@ -612,6 +869,8 @@ export default function ConnectionPanel({
                     .filter(
                       (f) =>
                         f.id !== baseId &&
+                        !requirementsFiles.includes(f.id) &&
+                        !designFiles.includes(f.id) &&
                         f.status !== "deleted" &&
                         f.status !== "quarantined",
                     )

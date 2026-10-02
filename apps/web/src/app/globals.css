@@ -2192,3 +2192,6 @@ button[hidden] {
     grid-row: 1;
   }
 }
+.mention-picker [aria-selected="true"] {
+  background: #eef4ff;
+}

@@ -453,9 +453,11 @@ export class IslandNode {
         throw Error("已有工作目录的需求或基线不一致。");
     }
     for (const fid of job.brief?.file_ids || []) {
+      const original = job.brief.documents?.find((file) => file.id === fid);
+      const extension = original?.name?.match(/\.([a-z0-9]{1,10})$/i)?.[0] || "";
       const response = await this.request("/api/agent-node/files/" + fid),
         bytes = Buffer.from(await response.arrayBuffer()),
-        doc = resolve(directory, ".island-output-document-" + fid);
+        doc = resolve(directory, ".island-output-document-" + fid + extension);
       await writeFile(doc, bytes);
       documents.push(doc);
     }

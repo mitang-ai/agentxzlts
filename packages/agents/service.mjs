@@ -89,6 +89,10 @@ export class AgentService {
     return this.transaction(async (db) => {
       const { member } = await this.room(db, roomId, userId, { write: true });
       await this.enabled(db, userId, roomId);
+      // 配额是账号级的，不同房间同时生成也必须串行核验。
+      await db.query("select pg_advisory_xact_lock(hashtextextended($1,0))", [
+        `agent-pairings:${userId}`,
+      ]);
       if (
         Number(
           (
@@ -134,6 +138,7 @@ export class AgentService {
       ])
     ).rows[0];
     if (
+      !locked ||
       locked.used_at ||
       locked.revoked_at ||
       new Date(locked.expires_at) <= new Date()
@@ -325,7 +330,7 @@ export class AgentService {
       const { room, member } = await this.room(db, roomId, userId);
       const seats = (
         await db.query(
-          "select s.*,p.display_name,p.status,p.type,p.last_active_at,n.name node_name,n.adapter,n.capabilities,n.owner_user_id,n.expires_at,n.revoked_at,n.last_seen_at,n.fingerprint,coalesce((select kind from agent_turns j where j.participant_id=p.id and j.status='leased'),'idle') activity from agent_seats s join participants p on p.id=s.participant_id join agent_nodes n on n.id=s.node_id where p.room_id=$1 order by s.created_at",
+          "select s.*,p.display_name,p.status,p.type,p.last_active_at,n.name node_name,n.adapter,n.capabilities,n.owner_user_id,n.expires_at,n.revoked_at,n.last_seen_at,n.fingerprint,coalesce((select kind from agent_turns j where j.participant_id=p.id and j.status='leased'),'idle') activity from agent_seats s join participants p on p.id=s.participant_id join agent_nodes n on n.id=s.node_id where p.room_id=$1 and s.deleted_at is null order by s.created_at",
           [roomId],
         )
       ).rows;
@@ -377,6 +382,15 @@ export class AgentService {
           [roomId],
         )
       ).rows;
+      const myPairings = (
+        await db.query(
+          `select p.id,p.room_id,r.name room_name,p.created_at,p.expires_at
+         from agent_pairings p join rooms r on r.id=p.room_id
+         where p.owner_user_id=$1 and p.used_at is null and p.revoked_at is null
+         and p.expires_at>now() order by p.created_at desc,p.id`,
+          [userId],
+        )
+      ).rows;
       return {
         seats,
         brief,
@@ -386,6 +400,7 @@ export class AgentService {
         turns,
         artifacts,
         pairings,
+        my_pairings: myPairings,
         manager: room.host_participant_id === member.id,
         me: member.id,
         agent_host_participant_id: room.agent_host_participant_id,
@@ -400,7 +415,7 @@ export class AgentService {
       });
       const seat = (
         await db.query(
-          "select s.*,p.display_name,p.room_id from agent_seats s join participants p on p.id=s.participant_id where s.participant_id=$1 and p.room_id=$2",
+          "select s.*,p.display_name,p.room_id from agent_seats s join participants p on p.id=s.participant_id where s.participant_id=$1 and p.room_id=$2 and s.deleted_at is null",
           [id.parse(input.participant_id), roomId],
         )
       ).rows[0];
@@ -520,6 +535,44 @@ export class AgentService {
     ).rows;
     for (const session of sessions) await this.pause(db, session, error);
   }
+  async deleteSeats(userId, roomId, input) {
+    const d = z
+      .union([
+        z
+          .object({ participant_id: id, all: z.literal(false).optional() })
+          .strict(),
+        z.object({ all: z.literal(true) }).strict(),
+      ])
+      .parse(input);
+    return this.transaction(async (db) => {
+      const { member } = await this.room(db, roomId, userId, { manager: true });
+      if (!d.all) {
+        const seat = (
+          await db.query(
+            "select s.* from agent_seats s join participants p on p.id=s.participant_id where p.room_id=$1 and s.participant_id=$2 and s.deleted_at is null",
+            [roomId, d.participant_id],
+          )
+        ).rows[0];
+        if (!seat) fail(404, "联机席位不存在。");
+        if (!["rejected", "revoked"].includes(seat.state))
+          fail(409, "请先撤销或拒绝此 Agent，再删除记录。");
+      }
+      // 仅移除列表记录，保留参与者、聊天和任务历史及已撤销的凭据状态。
+      const removed = await db.query(
+        "update agent_seats s set deleted_at=now() from participants p where p.id=s.participant_id and p.room_id=$1 and s.deleted_at is null and s.state in ('rejected','revoked') and ($2::uuid is null or s.participant_id=$2) returning s.participant_id",
+        [roomId, d.all ? null : d.participant_id],
+      );
+      for (const seat of removed.rows)
+        await this.emit(
+          db,
+          roomId,
+          "agent.seat.deleted",
+          member.id,
+          seat.participant_id,
+        );
+      return { ok: true, deleted: removed.rowCount };
+    });
+  }
   async revokePairing(userId, roomId, pairingId) {
     return this.transaction(async (db) => {
       const { room } = await this.room(db, roomId, userId);
@@ -547,6 +600,32 @@ export class AgentService {
       return { ok: true };
     });
   }
+  async deletePairings(userId, input) {
+    id.parse(userId);
+    const data = z
+      .object({
+        all: z.boolean().optional(),
+        pairing_ids: z.array(id).min(1).max(100).optional(),
+      })
+      .refine(
+        (v) => (v.all === true ? !v.pairing_ids : Boolean(v.pairing_ids)),
+        "请选择要删除的邀请码",
+      )
+      .parse(input);
+    return this.transaction(async (db) => {
+      await db.query("select pg_advisory_xact_lock(hashtextextended($1,0))", [
+        `agent-pairings:${userId}`,
+      ]);
+      const result = await db.query(
+        `delete from agent_pairings where owner_user_id=$1 and used_at is null
+         ${data.all ? "" : "and id=any($2::uuid[])"} returning id`,
+        data.all ? [userId] : [userId, data.pairing_ids],
+      );
+      if (!data.all && result.rowCount !== data.pairing_ids.length)
+        fail(409, "邀请码不存在、已使用或不属于你。");
+      return { deleted_ids: result.rows.map((row) => row.id) };
+    });
+  }
   async file(db, roomId, fileId) {
     const f = (
       await db.query(
@@ -560,12 +639,26 @@ export class AgentService {
   async publishBrief(userId, roomId, input) {
     const d = z
       .object({
-        requirements: z.string().trim().min(1).max(32000),
-        design: z.string().trim().min(1).max(32000),
+        requirements: z.string().trim().max(32000).default(""),
+        design: z.string().trim().max(32000).default(""),
+        requirements_file_ids: z.array(id).max(20).default([]),
+        design_file_ids: z.array(id).max(20).default([]),
         file_ids: z.array(id).max(20).default([]),
         base_file_id: id.nullable().default(null),
       })
       .parse(input);
+    if (!d.requirements && !d.requirements_file_ids.length)
+      fail(400, "请填写开发需求或上传需求文件。");
+    if (!d.design && !d.design_file_ids.length)
+      fail(400, "请填写设计文档或上传设计文件。");
+    d.file_ids = [
+      ...new Set([
+        ...d.file_ids,
+        ...d.requirements_file_ids,
+        ...d.design_file_ids,
+      ]),
+    ];
+    if (d.file_ids.length > 20) fail(400, "需求与设计最多关联 20 个文件。");
     return this.transaction(async (db) => {
       const { member } = await this.room(db, roomId, userId, {
         manager: true,
@@ -628,7 +721,7 @@ export class AgentService {
       const hash = digest(JSON.stringify({ ...d, base_hash: baseHash }));
       const brief = (
         await db.query(
-          "insert into collaboration_briefs(room_id,revision,requirements,design,file_ids,base_file_id,base_hash,content_hash,published_by) values($1,$2,$3,$4,$5,$6,$7,$8,$9) returning *",
+          "insert into collaboration_briefs(room_id,revision,requirements,design,file_ids,base_file_id,base_hash,content_hash,published_by,requirements_file_ids,design_file_ids) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning *",
           [
             roomId,
             revision,
@@ -639,6 +732,8 @@ export class AgentService {
             baseHash,
             hash,
             member.id,
+            d.requirements_file_ids,
+            d.design_file_ids,
           ],
         )
       ).rows[0];
@@ -1218,6 +1313,14 @@ export class AgentService {
           [session?.brief_id || job.room_id],
         )
       ).rows[0] || null;
+    if (brief) {
+      brief.documents = (
+        await db.query(
+          "select id,name,mime_type from files where room_id=$1 and id=any($2) and status='normal'",
+          [job.room_id, brief.file_ids],
+        )
+      ).rows;
+    }
     const participants = (
       await db.query(
         "select id,type,display_name from participants where room_id=$1 and status='active'",

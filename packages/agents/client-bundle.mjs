@@ -43,10 +43,14 @@ export async function nodeClientBundle(root) {
       ),
     ),
   );
-  const shell = await readFile(
-    /* turbopackIgnore: true */ resolve(root, "install.sh"),
-    "utf8",
-  );
+  const shell = (
+    await readFile(
+      /* turbopackIgnore: true */ resolve(root, "install.sh"),
+      "utf8",
+    )
+  )
+    .replace(/^\uFEFF/, "")
+    .replace(/\r\n/g, "\n");
   files.set(
     "connect.sh",
     Buffer.from(

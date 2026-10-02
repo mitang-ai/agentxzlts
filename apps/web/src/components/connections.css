@@ -366,6 +366,30 @@
   margin: 10px 0;
   font-size: 12px;
 }
+.brief-files {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #e3e8ef;
+  border-radius: 8px;
+}
+.brief-files small {
+  color: #65758b;
+  line-height: 1.6;
+}
+.brief-file {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  overflow-wrap: anywhere;
+}
+.seat-cleanup {
+  justify-content: space-between;
+  font-size: 13px;
+  margin-bottom: 12px;
+}
 .local-check pre {
   white-space: pre-wrap;
   word-break: break-word;
@@ -454,4 +478,30 @@
   .connection-panel code {
     word-break: break-all;
   }
+}
+.connection-invitations {
+  border: 1px solid var(--line, #dbe3ee);
+  border-radius: 12px;
+  padding: 14px;
+  margin: 16px 0;
+}
+.connection-invitation {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+}
+.connection-invitation > div {
+  min-width: 0;
+}
+.connection-invitation strong {
+  overflow-wrap: anywhere;
+}
+.connection-invitation small,
+.connection-invitations > small {
+  display: block;
+  color: #64748b;
+  font-size: 12px;
+  overflow-wrap: anywhere;
 }
