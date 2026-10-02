@@ -34,5 +34,6 @@ export class AgentService {
 }
 
 export class AgentError extends Error {
+  constructor(status: number, message: string);
   status: number;
 }

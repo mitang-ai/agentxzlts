@@ -270,6 +270,10 @@ export class IslandNode {
             packet.data.cancelled &&
             this.active?.job.id === packet.data.cancelled
           ) {
+            this.adapter.rejectReceipt?.(
+              this.active.job.id,
+              Error("任务已取消。"),
+            );
             this.controller?.abort();
             this.active = null;
             void unlink(this.spool).catch(() => {});
@@ -337,23 +341,35 @@ export class IslandNode {
         this.savedCursor = this.cursor;
       }
       if (state.cancelled) {
+        if (this.active)
+          this.adapter.rejectReceipt?.(
+            this.active.job.id,
+            Error("任务已取消。"),
+          );
         this.controller?.abort();
         this.active = null;
         await unlink(this.spool).catch(() => {});
         return;
       }
       if (this.active?.result) {
+        const active = this.active;
         await this.rpc("complete", {
-          id: this.active.job.id,
-          lease: this.active.job.lease,
-          result: this.active.result,
+          id: active.job.id,
+          lease: active.job.lease,
+          result: active.result,
         });
+        this.adapter.confirmed?.(active.job.id);
         this.log("本轮结果已确认回传，Agent 返回等待。");
         this.active = null;
         await unlink(this.spool).catch(() => {});
       } else if (this.active && !this.executing) {
         void this.execute(this.active.job);
-      } else if (!this.active && state.state === "approved" && !state.muted) {
+      } else if (
+        !this.active &&
+        state.state === "approved" &&
+        !state.muted &&
+        (!this.adapter.accepting || this.adapter.accepting())
+      ) {
         const job = await this.rpc("claim", {});
         if (job) {
           this.active = { job };
@@ -368,6 +384,7 @@ export class IslandNode {
         await unlink(this.spool).catch(() => {});
       } else if ([401, 403].includes(e.status)) this.stop();
       else if (e.status === 409 && this.active) {
+        this.adapter.rejectReceipt?.(this.active.job.id, e);
         this.controller?.abort();
         this.active = null;
         await unlink(this.spool).catch(() => {});
@@ -454,7 +471,8 @@ export class IslandNode {
     }
     for (const fid of job.brief?.file_ids || []) {
       const original = job.brief.documents?.find((file) => file.id === fid);
-      const extension = original?.name?.match(/\.([a-z0-9]{1,10})$/i)?.[0] || "";
+      const extension =
+        original?.name?.match(/\.([a-z0-9]{1,10})$/i)?.[0] || "";
       const response = await this.request("/api/agent-node/files/" + fid),
         bytes = Buffer.from(await response.arrayBuffer()),
         doc = resolve(directory, ".island-output-document-" + fid + extension);
@@ -566,6 +584,7 @@ export class IslandNode {
     }
   }
   async reportFailure(job, error) {
+    this.adapter.rejectReceipt?.(job.id, error);
     this.log("本机执行需要处理：" + boundedError(error));
     try {
       await this.rpc("failed", {

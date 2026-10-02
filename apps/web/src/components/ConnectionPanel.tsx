@@ -84,16 +84,17 @@ function connectionPrompt(origin: string, pairing: Row, development: boolean) {
     [
       `请在你所在的设备自动安装并连接协作岛房间`,
       `本次安装标识为 ${pairing.id}，以当前操作系统用户的主目录为基准，固定使用 .island-node/clients/${pairing.id} 作为专用安装目录，同一条提示词重复执行必须复用此目录、配置和身份，不能创建第二份安装或新的席位`,
-      `先检测操作系统和本机可用且已登录的 Agent，优先使用你当前所用的 Codex、Claude Code 或 OpenCode`,
-      `首先检查此专用目录里的 ${JSON.stringify(`.data/connections/${pairing.id}/config.json`)}；若已配对，用已安装的 Node.js 执行 packages/node/bin/island-node.mjs status --config 查看状态，已运行时只报告现有连接，未运行时用同一配置 start，不下载、不重装、不重新配对，配对码过期或已使用也不影响已保存身份的恢复`,
+      `先确认接收此提示词的当前宿主产品，不能按本机安装的工具自动选择其它 Agent：Codex/Claude Code/OpenCode 仅能选择自己的 CLI；WorkBuddy 等支持 MCP 的 GUI Agent 必须选择 mcp 宿主直连；只有当前产品自己提供真实接口时才可选择 acp/cli/a2a/http，接口不明时停下报告，不允许回退到 Codex`,
+      `首先检查此专用目录里的 ${JSON.stringify(`.data/connections/${pairing.id}/config.json`)}，在恢复前核对 adapter/host_name 是否确实对应当前宿主，旧配置指向其它 CLI 时必须停止本专用错误实例并报告需要新邀请重配，不得直接 start。若已正确配对，CLI 用已安装 Node.js 执行 packages/node/bin/island-node.mjs status --config 查看状态，已运行只报告现有连接，未运行用同一配置 start；mcp 模式则复用当前宿主已有的专用 mcpServers 配置，由该宿主启动 mcp 命令，不后台启动 start。不下载、不重装、不重新配对，配对码过期或已使用也不影响正确身份的恢复`,
       `仅在尚未安装时，向 ${origin}/api/agent-node/client 发送 POST 请求（Content-Type: application/json，请求体 ${JSON.stringify({ code: pairing.code })}）下载客户端 ZIP，无需网页登录，配对码只放请求体，解压到上述固定目录，已有运行中的安装不得覆盖`,
       `首次配置时在该目录运行 Windows 的 connect.cmd 或 Linux/macOS 的 bash connect.sh，启动程序会自动准备 Node.js 22+、npm 和客户端依赖`,
-      `给启动程序传入 --non-interactive --server ${JSON.stringify(origin)} --code ${JSON.stringify(pairing.code)} --config ${JSON.stringify(`.data/connections/${pairing.id}/config.json`)} --adapter 本机Agent类型 --workspace 专用工作目录的绝对路径 --name 设备名称 --agent-name 你的昵称 ${development ? "--allow-development" : "--no-development"}，占位参数请根据本机情况填写真实值`,
+      `给启动程序传入 --non-interactive --server ${JSON.stringify(origin)} --code ${JSON.stringify(pairing.code)} --config ${JSON.stringify(`.data/connections/${pairing.id}/config.json`)} --adapter 当前宿主接入类型 --host 当前产品名称 --workspace 专用工作目录的绝对路径 --name 设备名称 --agent-name 你的昵称 ${development ? "--allow-development" : "--no-development"}，占位参数请填写真实值；mcp 模式首次配置会输出专用 mcpServers，请将它添加到当前宿主，必须由当前宿主启动该 MCP，不能另开 CLI 后台转发`,
       development
         ? `我授权你在上述专用工作目录下的隔离子目录开发，请检测并准备 Git，收到聊天室批准的任务后再执行开发`
         : `本次仅授权联机讨论，本机开发保持关闭`,
       `配对码有效至 ${new Date(pairing.expires_at).toISOString()} 且只能首次配对一次，客户端会阻止同一配置重复启动；首次连接成功后保持客户端在后台运行并保存进程号和日志，不得复制其他 Agent 的配置、凭据或工作目录，不得终止其他 Agent 的进程`,
-      `加入后等待人类管理者审批及点名，最后报告连接状态、日志位置、重新启动和停止方法；若设备无法访问网站、没有可用的已登录 Agent、或配对码失效，请明确报告原因`,
+      `MCP 宿主批准后使用 island_wait_task 有界等待点名，使用当前宿主自己处理并调用 island_complete_task 回传。MCP 不保证 GUI 在后台自动唤醒；没有任务时停止本轮等待并说明限制，不得无限轮询，不得调用 Codex/Claude 等其它 CLI 代答。旧配置若实际 adapter 与当前宿主不一致，停止本专用实例后报告需要新邀请重配，不复用错误席位`,
+      `加入后等待人类管理者审批及点名，最后报告实际 adapter/宿主、连接状态、日志位置、重新启动和停止方法；若无法接入当前宿主、设备无法访问网站或配对码失效，请明确报告原因`,
     ].join("；") + "。"
   );
 }
@@ -555,8 +556,11 @@ export default function ConnectionPanel({
                     )}
                   </strong>
                   <small>
-                    {s.node_name} · {s.adapter} ·{" "}
-                    {s.capabilities.development ? "本机已授权开发" : "仅讨论"}
+                    {s.node_name} · {s.adapter}
+                    {s.capabilities?.host_name
+                      ? `（${s.capabilities.host_name}）`
+                      : ""}{" "}
+                    · {s.capabilities.development ? "本机已授权开发" : "仅讨论"}
                   </small>
                   <span className="seat-status">
                     {s.state === "pending"

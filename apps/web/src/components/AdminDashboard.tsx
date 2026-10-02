@@ -342,6 +342,26 @@ export default function AdminDashboard({
     [menu, setMenu] = useState(false),
     [systemTab, setSystemTab] = useState("health"),
     [systemRows, setSystemRows] = useState<Row[]>([]);
+  const [generating, setGenerating] = useState(false),
+    [generated, setGenerated] = useState<Row | null>(null),
+    [generationRequest, setGenerationRequest] = useState<string | null>(null);
+  async function generateAccount() {
+    if (generating) return;
+    setGenerating(true);
+    setError("");
+    const request_id = generationRequest || crypto.randomUUID();
+    setGenerationRequest(request_id);
+    try {
+      const result = await api<Row>("admin/users/generate", { request_id });
+      setGenerated(result);
+      setGenerationRequest(null);
+      await refresh();
+    } catch (error) {
+      setError((error as Error).message);
+    } finally {
+      setGenerating(false);
+    }
+  }
   const url = useCallback(
     (module = section) => {
       const p = new URLSearchParams({
@@ -478,11 +498,7 @@ export default function AdminDashboard({
         },
         {
           title: "设备连接",
-          render: (r) =>
-            r.last_seen_at &&
-            Date.now() - new Date(r.last_seen_at).getTime() < 45000
-              ? "在线"
-              : "离线",
+          render: (r) => (r.online === true ? "在线" : "离线"),
         },
         { title: "运行任务", render: (r) => r.active_turns },
         {
@@ -491,23 +507,7 @@ export default function AdminDashboard({
             !r.revoked_at && (
               <button
                 className="ad-text-button danger"
-                onClick={async () => {
-                  const reason = window.prompt(
-                    "填写撤销此设备的具体原因（至少 3 个字）",
-                  );
-                  if (!reason || reason.trim().length < 3) return;
-                  if (!window.confirm("确认撤销设备并停止在途任务？")) return;
-                  try {
-                    await api("admin/agents/revoke", {
-                      node_id: r.node_id,
-                      reason,
-                      confirm: true,
-                    });
-                    await refresh();
-                  } catch (e) {
-                    setError((e as Error).message);
-                  }
-                }}
+                onClick={() => act("agent_revoke", r)}
               >
                 撤销设备
               </button>
@@ -905,6 +905,17 @@ export default function AdminDashboard({
               {section !== "overview" && (
                 <button className="ad-button primary">查询</button>
               )}
+              {section === "users" &&
+                ["super", "operations"].includes(user.role) && (
+                  <button
+                    type="button"
+                    className="ad-button primary"
+                    disabled={generating}
+                    onClick={() => void generateAccount()}
+                  >
+                    {generating ? "生成中…" : "一键生成用户"}
+                  </button>
+                )}
               {[
                 "overview",
                 "users",
@@ -1542,6 +1553,85 @@ export default function AdminDashboard({
           )}
         </main>
       </div>
+      {generated && (
+        <Dialog.Root open onOpenChange={(open) => !open && setGenerated(null)}>
+          <Dialog.Portal>
+            <Dialog.Overlay className="ad-overlay" />
+            <Dialog.Content
+              className="ad-modal"
+              aria-describedby="generated-user-description"
+            >
+              <header>
+                <Dialog.Title>用户已生成</Dialog.Title>
+                <Dialog.Close aria-label="关闭生成结果">
+                  <X size={20} />
+                </Dialog.Close>
+              </header>
+              <p id="generated-user-description">
+                普通用户已创建，未授予管理员权限，也不会切换你当前的登录账号。登录账号是系统生成的占位邮箱，不能收邮件，请妥善保存登录信息。
+              </p>
+              <label>
+                登录账号
+                <input
+                  readOnly
+                  aria-label="生成的登录账号"
+                  value={generated.user.email}
+                />
+              </label>
+              <label>
+                昵称
+                <input
+                  readOnly
+                  aria-label="生成的昵称"
+                  value={generated.user.display_name}
+                />
+              </label>
+              {generated.password ? (
+                <>
+                  <label>
+                    初始密码
+                    <input
+                      readOnly
+                      aria-label="生成的初始密码"
+                      value={generated.password}
+                    />
+                  </label>
+                  <p className="ad-help">
+                    密码只在本次结果中显示，请安全交给用户。关闭后不会再次回显。
+                  </p>
+                </>
+              ) : (
+                <p role="alert">{generated.message}</p>
+              )}
+              <footer>
+                {generated.password && (
+                  <button
+                    className="ad-button primary"
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(
+                          `登录账号：${generated.user.email}\n初始密码：${generated.password}`,
+                        );
+                        setNotice("登录信息已复制，请安全交给用户。");
+                      } catch {
+                        setNotice("未能复制，请手动选中登录账号和密码。 ");
+                      }
+                    }}
+                  >
+                    复制登录信息
+                  </button>
+                )}
+                <button
+                  className="ad-button"
+                  onClick={() => setGenerated(null)}
+                >
+                  已保存，关闭
+                </button>
+              </footer>
+            </Dialog.Content>
+          </Dialog.Portal>
+        </Dialog.Root>
+      )}
       {modal && (
         <ActionDialog
           modal={modal}
@@ -2133,6 +2223,7 @@ function ActionDialog({
     [error, setError] = useState("");
   const action = modal.action;
   const names: Record<string, string> = {
+    agent_revoke: "撤销 Agent 设备",
     restrict_user: "设置用户限制",
     edit_user: "编辑用户",
     room_status: "更新房间状态",
@@ -2264,7 +2355,15 @@ function ActionDialog({
                     "noopener,noreferrer",
                   );
                   onClose();
-                } else
+                } else if (action === "agent_revoke")
+                  await onDone(
+                    await api<Row>("admin/agents/revoke", {
+                      node_id: values.node_id,
+                      reason,
+                      confirm,
+                    }),
+                  );
+                else
                   await onDone(
                     await api<Row>("admin/command", { action, data }),
                   );
@@ -2275,6 +2374,11 @@ function ActionDialog({
               }
             }}
           >
+            {action === "agent_revoke" && (
+              <p>
+                将断开此设备、撤销凭据并取消其在途任务；聊天和任务历史保留，其它设备不受影响。请填写原因并确认。
+              </p>
+            )}
             {action === "restrict_user" && (
               <>
                 {field("status", "限制级别", "text", [

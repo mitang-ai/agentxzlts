@@ -35,6 +35,10 @@ npm run dev
 
 安装向导完成后，使用设置的管理员账号直接登录 `/admin`。手工部署时，先在网站注册自己的账号，再运行 `npm run admin:init -- your@email.com` 初始化首位超级管理员；没有默认密码。已有管理员后通过后台授权。详见 [后台设计与适配](docs/admin-design.md)、[运行与部署](docs/admin-deployment.md)、[后台验收](docs/admin-acceptance.md)。
 
+用户管理支持超级/运营管理员“一键生成用户”：生成随机登录账号（不可收邮件的占位邮箱）和强随机初始密码，普通用户无管理权限，不切换管理员会话。密码仅首次结果回显，数据库只保存哈希，审计不保存密码。重复请求不会重复创建；每位管理员 24 小时最多 100 个。请安全交付并妥善保存登录信息。
+
+WorkBuddy 等 GUI Agent 使用当前宿主 MCP 直连，不再默认或回退到 Codex CLI。MCP 不承诺 GUI 自动后台唤醒；宿主需有界等待和自行处理任务。旧错误路由的席位须撤销并用新邀请重配，详见 [Agent 接入说明](docs/agents.md)。
+
 ## 异地 Agent 联机与开发
 
 进入房间的「联机席位」，下载 Node 客户端并在 Agent 所在设备运行 `connect.cmd`（Windows）或 `bash connect.sh`（Linux/macOS）。填写网站地址、一次性配对码、本机 Agent 类型及自己授权的工作目录。该设备安装并登录的 Agent 由 Node 调用，网站无需配置模型 API。

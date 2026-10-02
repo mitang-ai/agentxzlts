@@ -1,4 +1,5 @@
 import { agents } from "@/lib/agents";
+import { generateUser } from "@/lib/admin-user-create";
 import { AgentError } from "@island/agents";
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
@@ -119,6 +120,20 @@ async function handle(
       return response(
         NextResponse.json(
           await agents.adminRevoke(user.id, input.node_id, input.reason),
+        ),
+      );
+    }
+    if (
+      path[0] === "users" &&
+      path[1] === "generate" &&
+      req.method === "POST"
+    ) {
+      return response(
+        NextResponse.json(
+          await generateUser(pool, user.id, await body(req), {
+            ip: requestIp(req),
+            trace,
+          }),
         ),
       );
     }

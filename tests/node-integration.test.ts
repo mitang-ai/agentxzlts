@@ -17,6 +17,7 @@ import { spawn, fork, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import WebSocket from "ws";
 import { createHash } from "node:crypto";
+import { createInterface } from "node:readline";
 // @ts-ignore Executable ES modules used by the real server and client.
 import { attachGateway } from "../packages/agents/gateway.mjs";
 // @ts-ignore
@@ -1000,3 +1001,232 @@ describe.sequential(
     });
   },
 );
+
+it("WorkBuddy/Hermes 宿主经真实 MCP+WSS 各自处理点名，撤销只停止目标设备和在途任务", async () => {
+  const peers: any[] = [],
+    admin = randomUUID();
+  await pool.query(
+    "insert into auth.users(id,email,raw_user_meta_data) values($1,$2,$3)",
+    [
+      admin,
+      admin + "@host-revoke.invalid",
+      JSON.stringify({ display_name: "撤销验收" }),
+    ],
+  );
+  await pool.query(
+    "insert into admin_members(user_id,role) values($1,'technical')",
+    [admin],
+  );
+  try {
+    for (const name of ["WorkBuddy", "Hermes"]) {
+      const pairing = await service.createPairing(user, room);
+      const identity = await service.pair({
+        code: pairing.code,
+        node_name: name + " 测试设备",
+        agent_name: name,
+        adapter: "mcp",
+        fingerprint: randomUUID(),
+        capabilities: {},
+      });
+      await service.seatAction(user, room, "approve", {
+        participant_id: identity.participant_id,
+      });
+      const directory = resolve(root, "host-" + name),
+        file = resolve(directory, "config.json");
+      await mkdir(resolve(directory, "workspace"), { recursive: true });
+      await writeFile(
+        file,
+        JSON.stringify({
+          server: url,
+          ...identity,
+          adapter: "mcp",
+          host_name: name,
+          agent_name: name,
+          allow_development: false,
+          workspace: resolve(directory, "workspace"),
+        }),
+        { mode: 0o600 },
+      );
+      const child = spawn(
+        process.execPath,
+        [resolve("packages/node/bin/island-node.mjs"), "mcp", "--config", file],
+        {
+          env: {
+            ...process.env,
+            NODE_EXTRA_CA_CERTS: resolve(root, "cert.pem"),
+          },
+          stdio: ["pipe", "pipe", "pipe"],
+        },
+      );
+      bootstrapChildren.push(child);
+      child.stderr.on("data", (b) => logs.push(name + ": " + b));
+      const pending = new Map(),
+        packets: any[] = [];
+      let sequence = 0;
+      const lines = createInterface({ input: child.stdout });
+      lines.on("line", (line) => {
+        const p = JSON.parse(line);
+        packets.push(p);
+        const waiter = pending.get(p.id);
+        if (waiter) {
+          clearTimeout(waiter.timer);
+          pending.delete(p.id);
+          waiter.resolve(p);
+        }
+      });
+      const call = (method: string, params: any = {}) =>
+        new Promise<any>((resolve, reject) => {
+          const id = ++sequence,
+            timer = setTimeout(() => {
+              pending.delete(id);
+              reject(Error("MCP 等待超时：" + method));
+            }, 18000);
+          pending.set(id, { resolve, reject, timer });
+          child.stdin.write(
+            JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n",
+          );
+        });
+      const tool = async (name: string, args: any = {}) => {
+        const p = await call("tools/call", { name, arguments: args });
+        if (p.error || p.result.isError)
+          throw Error(JSON.stringify(p.error || p.result));
+        return JSON.parse(p.result.content[0].text);
+      };
+      const handshake = await call("initialize", {
+        protocolVersion: "2025-06-18",
+        clientInfo: { name, version: "fixture" },
+        capabilities: {},
+      });
+      expect(handshake.result.capabilities.tools).toBeDefined();
+      child.stdin.write(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          method: "notifications/initialized",
+        }) + "\n",
+      );
+      peers.push({ identity, child, tool, call, packets, lines });
+      await waitFor(
+        async () => (await tool("island_status")).connected,
+        name + " 专用宿主在线",
+      );
+    }
+    const source = await human("message", {
+      room_id: room,
+      content: "只让 WorkBuddy 回答",
+      client_message_id: randomUUID(),
+      mentioned_participant_ids: [peers[0].identity.participant_id],
+    });
+    // 只有宿主有界等待时才领取；闲置 MCP 不抢占任务，也不转发任何 CLI。
+    await new Promise((r) => setTimeout(r, 2100));
+    expect(
+      (
+        await pool.query(
+          "select status from agent_turns where source_message_id=$1",
+          [source.id],
+        )
+      ).rows[0].status,
+    ).toBe("queued");
+    const task = await peers[0].tool("island_wait_task", { wait_seconds: 10 });
+    expect(task.task.participant_id).toBe(peers[0].identity.participant_id);
+    expect(JSON.stringify(task)).not.toContain(peers[0].identity.token);
+    expect(task.task.lease).toBeUndefined();
+    expect(
+      await peers[1].tool("island_wait_task", { wait_seconds: 1 }),
+    ).toBeNull();
+    const result = { message: "由 WorkBuddy 宿主自己回答" };
+    expect(
+      await peers[0].tool("island_complete_task", {
+        task_id: task.task_id,
+        delivery_id: task.delivery_id,
+        result,
+      }),
+    ).toMatchObject({ confirmed: true });
+    await peers[0].tool("island_complete_task", {
+      task_id: task.task_id,
+      delivery_id: task.delivery_id,
+      result,
+    });
+    expect(
+      (
+        await pool.query(
+          "select sender_participant_id from messages where room_id=$1 and content=$2",
+          [room, result.message],
+        )
+      ).rows,
+    ).toEqual([{ sender_participant_id: peers[0].identity.participant_id }]);
+    const foreign = await peers[1].call("tools/call", {
+      name: "island_complete_task",
+      arguments: {
+        task_id: task.task_id,
+        delivery_id: task.delivery_id,
+        result,
+      },
+    });
+    expect(foreign.result.isError).toBe(true);
+    await human("message", {
+      room_id: room,
+      content: "让 Hermes 自己回答",
+      client_message_id: randomUUID(),
+      mentioned_participant_ids: [peers[1].identity.participant_id],
+    });
+    const other = await peers[1].tool("island_wait_task", { wait_seconds: 10 });
+    await peers[1].tool("island_complete_task", {
+      task_id: other.task_id,
+      delivery_id: other.delivery_id,
+      result: { message: "由 Hermes 宿主回答" },
+    });
+    await human("message", {
+      room_id: room,
+      content: "撤销前在途点名",
+      client_message_id: randomUUID(),
+      mentioned_participant_ids: [peers[0].identity.participant_id],
+    });
+    const cancelled = await peers[0].tool("island_wait_task", {
+      wait_seconds: 10,
+    });
+    await service.adminRevoke(
+      admin,
+      peers[0].identity.node_id,
+      "撤销宿主在途授权",
+    );
+    await waitFor(
+      async () => !(await peers[0].tool("island_status")).connected,
+      "撤销后宿主断开",
+    );
+    const stale = await peers[0].call("tools/call", {
+      name: "island_complete_task",
+      arguments: {
+        task_id: cancelled.task_id,
+        delivery_id: cancelled.delivery_id,
+        result: { message: "不应写入" },
+      },
+    });
+    expect(stale.result.isError).toBe(true);
+    expect(
+      (
+        await pool.query("select status from agent_turns where id=$1", [
+          cancelled.task_id,
+        ])
+      ).rows[0].status,
+    ).toBe("cancelled");
+    await expect(
+      service.connect(peers[0].identity.token),
+    ).rejects.toMatchObject({ status: 401 });
+    expect((await peers[1].tool("island_status")).connected).toBe(true);
+    expect(children[1].exitCode).toBeNull(); // 先前独立 CLI 仍在线，未被抢占或终止。
+    expect(
+      await service.adminRevoke(
+        admin,
+        peers[0].identity.node_id,
+        "重复撤销验收",
+      ),
+    ).toMatchObject({ already_revoked: true });
+  } finally {
+    for (const peer of peers) {
+      peer.child.stdin.end();
+      peer.lines.close();
+    }
+    await pool.query("delete from admin_audit_logs where admin_id=$1", [admin]);
+    await pool.query("delete from auth.users where id=$1", [admin]);
+  }
+}, 60000);
