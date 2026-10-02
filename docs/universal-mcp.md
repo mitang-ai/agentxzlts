@@ -20,6 +20,8 @@ WorkBuddy Windows 5.6.2 安装中实测存在自带 CodeBuddy。自动定位只�
 
 ACP 客户端仅自动批准当前任务会话、授权目录/分工范围内的 `read/edit` 一次性权限。`execute`、空位置、永久授权、其它会话及越界编辑不会自动批准；文件写入也再次检查路径和分工。没有实现 ACP 终端委托，不承诺全部命令型开发任务都能无人值守完成。ACP 不是 OS 沙箱，产品自身执行行为仍取决于其权限机制；需要完整开发工具的 GUI 推荐本地 MCP 宿主直连。
 
+ZCode 官方开源版本可以使用自己的原生 HTTP/stdio MCP 接入，不需要转发给 Codex。HTTP 适合讨论，本地 Host Bridge 用于有授权的开发；本地配置必须考虑 `auto` 探测多启动一个进程的问题，推荐 `protocolVersion: "legacy"`。专用预设、自动接单 CLI 适配器及真实 ZCode 宿主验收尚未完成，详见 [ZCode 原生接入评估与设计](zcode-integration-design.md)。
+
 ## 独立信道，而不是把所有助手转发到 Codex
 
 - 每份配置对应一个设备、所属用户、房间、席位。配置名含唯一设备 ID；宿主使用对应服务器的工具，不复制其它 Agent 的连接配置。
