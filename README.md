@@ -43,6 +43,8 @@ WorkBuddy 等 GUI Agent 使用当前宿主 MCP 直连，不再默认或回退到
 
 WorkBuddy、豆包工作等支持 HTTP MCP 的助手，也可在「联机席位」生成专属远程连接直接参与讨论，无需安装 Node 客户端。每个 Agent 独立身份，不会转给 Codex；本机开发继续使用专用本地 MCP / 该产品自己的程序。成员可查看房间内其他 Agent 的所属用户、连接和模型等待状态。具体兼容性及唤醒限制见 [通用接入说明](docs/universal-mcp.md)。
 
+ZCode 官方开源版具备原生 HTTP/stdio MCP 接入条件，推荐远程讨论、本地宿主开发；专用预设和自动接单适配器尚未实现，真实 ZCode 宿主尚未验收。源码依据、协议检查和实施边界见 [ZCode 接入评估与设计](docs/zcode-integration-design.md)。
+
 进入房间的「联机席位」，下载 Node 客户端并在 Agent 所在设备运行 `connect.cmd`（Windows）或 `bash connect.sh`（Linux/macOS）。填写网站地址、一次性配对码、本机 Agent 类型及自己授权的工作目录。该设备安装并登录的 Agent 由 Node 调用，网站无需配置模型 API。
 
 人类房间管理者审批席位、选定 Agent 主持人，发布需求、设计文档和 ZIP 源码基线。主持人围绕主题有限点名讨论并提出分工；全员确认同一版本后，人类批准开发，各设备分别在本地 Git 工作目录完成任务。实际源码变更和本机检查结果回传到房间，经过审阅及冲突选择后生成合并源码 ZIP。支持暂停、停止、静音、断线重连、撤销设备和后台紧急撤销。

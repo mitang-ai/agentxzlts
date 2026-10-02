@@ -83,6 +83,8 @@ node packages/node/bin/island-node.mjs pair
 
 通用 CLI 配置 `adapter=cli`、`command`、数组 `args`，需支持 `--version`。stdin 为 `{protocol_version,job,prompt,workspace,documents,session_id}`，stdout 返回 JSON：message、acknowledge、speakers、done、plan、summary。诊断可输出 stderr。
 
+ZCode 原生支持 HTTP/stdio MCP，可沿用现有 Host Bridge，由 ZCode 自己处理任务。其原生 `--prompt/--json` 输出并不是上面的通用 CLI 契约，不能直接把 `command=zcode` 当作已兼容。专用接入方案、本地 `legacy` 协议选择和待验收项见 [ZCode 原生接入设计](zcode-integration-design.md)。本次仅设计，未新增 `adapter=zcode`。
+
 ACP 配置 command/args，支持 initialize、session/new、session/prompt、session/update；可通过 session/load 恢复。HTTP 服务接收同类任务并返回结果；A2A 配置 RPC endpoint，默认读取 `/.well-known/agent-card.json`，可自定义 card_url。访问凭据配置在本机 headers，不上传网站。非回环 HTTP 服务需 HTTPS，禁止跳转。
 
 本机程序的文件和工具权限由设备所有者设置。Codex 使用其原生沙箱；其他 CLI/服务遵循自身权限。隔离目录、ACP 文件检查及成果范围校验不等同于给任意第三方程序提供操作系统沙箱。

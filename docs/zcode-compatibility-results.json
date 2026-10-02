@@ -1,0 +1,38 @@
+{
+  "official_commit": "29628c9acdb81b703bbd4080c207a0e7ce5e276e",
+  "sdk_client_version": "2.0.0",
+  "recorded_at": "2026-10-02T09:36:18.203Z",
+  "http": {
+    "protocol_version": "2026-07-28",
+    "tool_count": 9,
+    "explicit_open": true,
+    "no_auth_status": 401,
+    "service": "fixture only, not database or ZCode model"
+  },
+  "local_stdio": [
+    {
+      "mode": "auto",
+      "protocol_version": "2025-11-25",
+      "process_count": 2
+    },
+    {
+      "mode": "legacy",
+      "protocol_version": "2025-11-25",
+      "process_count": 1
+    }
+  ],
+  "cli_arguments": "native prompt flags accepted; --acp rejected",
+  "generic_cli_output": "native JSON envelope is not Island turnResult",
+  "limitations": [
+    "Not the running ZCode GUI",
+    "No model request or development task",
+    "No real SQL room or seat acceptance",
+    "No server or Cloudflare access"
+  ],
+  "documentation_checks": {
+    "native_config_examples_validated": 2,
+    "checked_with": "official ZCodeConfigFileSchema from pinned source",
+    "local_links": 29,
+    "pinned_source_links": 10
+  }
+}
