@@ -81,3 +81,19 @@ Codex、Claude Code、OpenCode 原生 CLI 调用已实现；当前环境核对 C
 [桌面席位](agent-screenshots/seats-desktop.png) · [手机席位](agent-screenshots/seats-mobile.png) · [桌面成果](agent-screenshots/remote-development-desktop.png) · [手机成果](agent-screenshots/remote-development-mobile.png)
 
 [连接和协作流程](agents.md) · [架构与协议](agent-boundary.md) · [部署与 WebSocket 代理](deployment.md)
+
+## 2026-10-02：通用远程 MCP、模型状态与 WorkBuddy 路由（Windows）
+
+本轮使用全新隔离 PostgreSQL（127.0.0.1:55434）、13 个迁移和生产构建的本地 Web（localhost:3102），不使用生产数据库、不更新服务器或 Cloudflare。历史章节中的 Linux / 单 Gateway 验证范围不代表本轮环境。
+
+- 类型检查、生产构建通过；官方 npm registry 的生产依赖审计报告为 0 已知漏洞。
+- 12 个测试文件：**119 通过，3 未执行**。仅排除既有的 Windows 安装器环境限制用例：“可下载的独立客户端包能从锁文件安装”“下载后的启动程序能无交互安装配置”“首次并发执行同一提示词”。未放宽这些用例的断言，未把它们声称为通过。实际客户端下载包包含 WorkBuddy 新模块的断言通过。
+- 新的 10 个远程 MCP 用例使用官方 SDK 客户端，分别验证 2026 默认协议和 2025-03-26 客户端在真实 HTTP 上发现、连接、点名、领取、续约、重交付、幂等回传，并查询最终消息和任务状态；另验证跨用户/房间/连接拒绝、撤销、超时、来源/Host/请求体限制、文档读取和模型就绪。两个 AgentService 实例使用同一数据库时不能抢占连接；不是生产集群压测。
+- 原 TLS/WSS 与本地 MCP 集成继续通过：两个独立设备进程、本地 Git 修改、验证、ZIP 回传、审阅合并、断线重连、IP 规则，以及两个模拟宿主通道相互隔离。
+- 15 个适配器测试覆盖真实本机协议夹具、ACP 当前会话一次性读写、分工边界、拒绝永久/命令执行/越界权限、WorkBuddy 定位和旧配置路由保护。
+- **5 个浏览器端到端用例通过**：远程 MCP 的配置生成、跨用户席位、网页输入 `@` 到实际回传和撤销；原双设备完整开发/交付；在线/提及/邀请清理；配对码/需求文件；后台生成用户/撤销。390px 手机视口无横向溢出。修复了实测的 Windows ZIP MIME 不标准导致基线上传 400。
+- 本机真实 WorkBuddy 5.6.2 自带 CodeBuddy `--acp` 初始化成功，使用的是自己的引擎，没有发送模型任务。真实 WorkBuddy / 豆包工作 GUI 里的模型对话、后台唤醒和开发尚未验收；MCP 不会自动唤醒休眠 GUI。WorkBuddy OpenAPI 唤醒需要第三方应用与用户 OAuth，本轮没有授权、没有启用。
+
+复现：在隔离数据库上执行 `npm test -- tests/remote-mcp.test.ts tests/adapters.test.ts tests/connection-ux.test.ts`；Web 启动后执行 `npm run test:e2e -- tests/e2e/remote-mcp.spec.ts tests/e2e/agents.spec.ts tests/e2e/connection-ux.spec.ts tests/e2e/chat-presence-invitations.spec.ts tests/e2e/admin-generate-revoke.spec.ts`。Windows TLS 集成需要 OpenSSL 在 PATH **末尾**，不要前置 Git usr/bin 以免遮蔽系统 whoami；使用 `node node_modules/vitest/vitest.mjs` 传正则筛选参数，避免 npm.cmd 把 `|` 当作 shell 管道。结果在本机忽略目录 `.data/ux-check/universal-results.json`、`universal-audit.json`、`universal-evidence/`，浏览器报告在 `test-results/results.json`。
+
+接入步骤、工具、租约和上线条件见 [通用 Agent 接入说明](universal-mcp.md)。本轮上线范围仅 GitHub。

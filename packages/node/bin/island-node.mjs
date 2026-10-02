@@ -137,7 +137,22 @@ async function init() {
       fingerprint: existing.fingerprint || randomUUID(),
       checks: existing.checks || [],
     };
-    if (["cli", "acp"].includes(adapter)) {
+    if (args.includes("--workbuddy-engine")) {
+      if (adapter !== "acp")
+        throw Error(
+          "--workbuddy-engine 必须明确配合 --adapter acp，不是现有 GUI 对话。",
+        );
+      if (value("command") || value("args"))
+        throw Error("不能同时指定 WorkBuddy 自动定位和自定义程序。");
+      if (value("host") && !/^work\s*buddy$/i.test(value("host")))
+        throw Error("WorkBuddy 自带引擎不能声明为其它宿主。");
+      const { workBuddyACP } = await import("../src/workbuddy.mjs");
+      Object.assign(config, await workBuddyACP());
+      config.workbuddy_engine = true;
+      console.log(
+        "已选择 WorkBuddy 自带 CodeBuddy ACP：使用独立任务会话，不是已有桌面对话；不启动 Codex。",
+      );
+    } else if (["cli", "acp"].includes(adapter)) {
       config.command =
         value("command") ||
         (await ask("本机 Agent 程序路径", existing.command || ""));
@@ -227,6 +242,19 @@ async function start(config) {
 let instanceLease, runningNode;
 function verifyExisting(config) {
   if (!config?.token) return;
+  if (
+    args.includes("--workbuddy-engine") &&
+    (config.adapter !== "acp" || config.workbuddy_engine !== true)
+  )
+    throw Error(
+      "此配置不是 WorkBuddy 专用引擎，请使用新的独立配置和邀请，不能替换原 Agent。",
+    );
+  if (
+    value("args") &&
+    JSON.stringify(JSON.parse(value("args"))) !==
+      JSON.stringify(config.args || [])
+  )
+    throw Error("程序参数与已有 Agent 不一致，不能替换原信道。");
   if (value("code") && config.pairing_code_hash !== codeHash(value("code")))
     throw Error(
       "此配置属于另一个已配对 Agent；请为新配对码省略 --config 自动隔离，或指定新的配置路径，不能覆盖已有身份。",
@@ -293,7 +321,7 @@ try {
   }
   if (command === "help" || args.includes("--help"))
     console.log(
-      "协作岛异地 Node\n  bootstrap  自动准备依赖、配置、配对并连接\n  init       设置本机 Agent 与明确授权的工作目录\n  pair       用房间配对码申请联机席位\n  start      连接并等待受控发言/任务\n  status     查看设备配置（隐藏凭据）\n  pull       下载房间成果 ZIP，需 --file 文件 ID --out 保存路径\n支持 --config 本机配置文件；自动连接可用 --non-interactive --server 地址 --code 配对码 --adapter 类型 --workspace 目录 --name 设备名称 --agent-name 昵称；默认仅讨论，--allow-development 明确授权开发，--no-development 仅讨论；Ctrl+C 断开并停止本地执行。",
+      "协作岛异地 Node\n  bootstrap  自动准备依赖、配置、配对并连接\n  init       设置本机 Agent 与明确授权的工作目录\n  pair       用房间配对码申请联机席位\n  start      连接并等待受控发言/任务\n  status     查看设备配置（隐藏凭据）\n  pull       下载房间成果 ZIP，需 --file 文件 ID --out 保存路径\n支持 --config 本机配置文件；自动连接可用 --non-interactive --server 地址 --code 配对码 --adapter 类型 --workspace 目录 --name 设备名称 --agent-name 昵称；Windows 可明确使用 --adapter acp --workbuddy-engine，运行 WorkBuddy 自带独立引擎而非现有 GUI 对话；默认仅讨论，--allow-development 明确授权开发，--no-development 仅讨论；Ctrl+C 断开并停止本地执行。",
     );
   else if (command === "bootstrap") {
     let config = await readJSON(file);

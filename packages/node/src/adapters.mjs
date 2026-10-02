@@ -5,6 +5,7 @@ import { resolve, relative, isAbsolute, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { turnResultSchema } from "../../agents/protocol.mjs";
 import { HostAdapter } from "./host-adapter.mjs";
+import { inScope } from "../../agents/archive.mjs";
 export function parseResult(value) {
   if (typeof value === "object" && value) return turnResultSchema.parse(value);
   const text = String(value)
@@ -593,6 +594,8 @@ export class ACPAdapter {
         send({ jsonrpc: "2.0", id: requestId, method, params });
       });
     const resolvePath = async (path) => {
+      if (typeof path !== "string" || !path || path.length > 4096)
+        throw Error("ACP 文件路径无效。");
       const full = resolve(cwd, path),
         r = relative(cwd, full);
       if (r.startsWith("..") || isAbsolute(r))
@@ -607,6 +610,13 @@ export class ACPAdapter {
           if (e.code !== "ENOENT") throw e;
         }
       }
+      return full;
+    };
+    const writePath = async (path) => {
+      const full = await resolvePath(path),
+        scoped = relative(cwd, full).split("\\").join("/");
+      if (job.kind !== "develop" || !inScope(scoped, job.input?.paths || []))
+        throw Error("ACP 写入超出本次分工授权范围。");
       return full;
     };
     child.stdout.on("data", (chunk) => {
@@ -641,6 +651,7 @@ export class ACPAdapter {
           continue;
         }
         if (message.method === "session/update") {
+          if (message.params?.sessionId !== this.sessionId) continue;
           const update = message.params?.update;
           if (
             update?.sessionUpdate === "agent_message_chunk" &&
@@ -653,9 +664,41 @@ export class ACPAdapter {
           void (async () => {
             try {
               let result;
-              if (message.method === "session/request_permission")
+              if (
+                !this.sessionId ||
+                message.params?.sessionId !== this.sessionId
+              )
+                throw Error("ACP 请求不属于当前任务会话。");
+              if (message.method === "session/request_permission") {
                 result = { outcome: { outcome: "cancelled" } };
-              else if (message.method === "fs/read_text_file")
+                const tool = message.params.toolCall,
+                  option = message.params.options?.find(
+                    (o) => o.kind === "allow_once",
+                  );
+                // 不接受执行命令、空位置、永久授权或越界编辑。不能自动放开所有工具。
+                if (
+                  option &&
+                  ["read", "edit"].includes(tool?.kind) &&
+                  Array.isArray(tool.locations) &&
+                  tool.locations.length > 0 &&
+                  tool.locations.length <= 20
+                ) {
+                  try {
+                    for (const location of tool.locations)
+                      await (tool.kind === "edit"
+                        ? writePath(location.path)
+                        : resolvePath(location.path));
+                    result = {
+                      outcome: {
+                        outcome: "selected",
+                        optionId: option.optionId,
+                      },
+                    };
+                  } catch {
+                    /* 权限不满足时按 ACP 标准取消，不扩大授权。 */
+                  }
+                }
+              } else if (message.method === "fs/read_text_file")
                 result = {
                   content: await readFile(
                     await resolvePath(message.params.path),
@@ -666,7 +709,7 @@ export class ACPAdapter {
                 message.method === "fs/write_text_file" &&
                 job.kind === "develop"
               ) {
-                const path = await resolvePath(message.params.path);
+                const path = await writePath(message.params.path);
                 await mkdir(resolve(path, ".."), { recursive: true });
                 await writeFile(path, String(message.params.content), {
                   flag: "w",

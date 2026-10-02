@@ -147,7 +147,13 @@ export class AgentService {
     return { pairing: locked, room };
   }
   async authorizeClientDownload(code) {
-    await this.transaction((db) => this.pairingAccess(db, code));
+    await this.transaction(async (db) => {
+      const { pairing } = await this.pairingAccess(db, code);
+      await db.query(
+        "update agent_pairings set download_started_at=now() where id=$1",
+        [pairing.id],
+      );
+    });
   }
   async pair(input) {
     const data = z
@@ -188,60 +194,99 @@ export class AgentService {
     const token = secret();
     return this.transaction(async (db) => {
       const { pairing, room } = await this.pairingAccess(db, data.code);
-      if (
-        Number(
-          (
-            await db.query(
-              "select count(*) n from agent_seats s join participants p on p.id=s.participant_id where p.room_id=$1 and s.state in ('pending','approved')",
-              [room.id],
-            )
-          ).rows[0].n,
-        ) >= 12
+      return this.pairInTransaction(db, data, token, pairing, room);
+    });
+  }
+  async pairInTransaction(db, data, token, pairing, room) {
+    if (
+      Number(
+        (
+          await db.query(
+            "select count(*) n from agent_seats s join participants p on p.id=s.participant_id where p.room_id=$1 and s.state in ('pending','approved')",
+            [room.id],
+          )
+        ).rows[0].n,
+      ) >= 12
+    )
+      fail(409, "一个房间最多 12 个待批准或已批准 Agent 席位。");
+    const node = (
+      await db.query(
+        "insert into agent_nodes(owner_user_id,name,agent_name,adapter,token_hash,fingerprint,capabilities) values($1,$2,$3,$4,$5,$6,$7) returning id,expires_at",
+        [
+          pairing.owner_user_id,
+          data.node_name,
+          data.agent_name,
+          data.adapter,
+          digest(token),
+          data.fingerprint,
+          JSON.stringify(data.capabilities),
+        ],
       )
-        fail(409, "一个房间最多 12 个待批准或已批准 Agent 席位。");
-      const node = (
-        await db.query(
-          "insert into agent_nodes(owner_user_id,name,agent_name,adapter,token_hash,fingerprint,capabilities) values($1,$2,$3,$4,$5,$6,$7) returning id,expires_at",
-          [
-            pairing.owner_user_id,
-            data.node_name,
-            data.agent_name,
-            data.adapter,
-            digest(token),
-            data.fingerprint,
-            JSON.stringify(data.capabilities),
-          ],
-        )
-      ).rows[0];
-      const participant = (
-        await db.query(
-          "insert into participants(room_id,type,display_name,status) values($1,'agent',$2,'left') returning id",
-          [room.id, data.agent_name],
-        )
-      ).rows[0];
+    ).rows[0];
+    const participant = (
       await db.query(
-        "insert into agent_seats(participant_id,node_id) values($1,$2)",
-        [participant.id, node.id],
-      );
-      await db.query(
-        "update agent_pairings set used_at=now(),node_id=$2 where id=$1",
-        [pairing.id, node.id],
-      );
-      await this.emit(
+        "insert into participants(room_id,type,display_name,status) values($1,'agent',$2,'left') returning id",
+        [room.id, data.agent_name],
+      )
+    ).rows[0];
+    await db.query(
+      "insert into agent_seats(participant_id,node_id) values($1,$2)",
+      [participant.id, node.id],
+    );
+    await db.query(
+      "update agent_pairings set used_at=now(),node_id=$2 where id=$1",
+      [pairing.id, node.id],
+    );
+    await this.emit(
+      db,
+      room.id,
+      "agent.pairing.requested",
+      null,
+      participant.id,
+    );
+    return {
+      node_id: node.id,
+      token,
+      expires_at: node.expires_at,
+      participant_id: participant.id,
+      room_id: room.id,
+      state: "pending",
+    };
+  }
+  async createRemoteConnection(userId, roomId, input) {
+    const data = z
+      .object({ host_name: name, agent_name: z.string().trim().min(1).max(40) })
+      .strict()
+      .parse(input);
+    return this.transaction(async (db) => {
+      const { room } = await this.room(db, roomId, userId, { write: true });
+      await this.enabled(db, userId, roomId);
+      // 直接在网页登录授权下生成一次性展示的设备凭据；不把 token 交给 MCP 工具。
+      const token = secret(),
+        pairing = (
+          await db.query(
+            "insert into agent_pairings(room_id,owner_user_id,code_hash) values($1,$2,$3) returning *",
+            [roomId, userId, digest(secret())],
+          )
+        ).rows[0];
+      return this.pairInTransaction(
         db,
-        room.id,
-        "agent.pairing.requested",
-        null,
-        participant.id,
-      );
-      return {
-        node_id: node.id,
+        {
+          node_name: `${data.host_name} 远程连接`.slice(0, 60),
+          agent_name: data.agent_name,
+          adapter: "mcp",
+          fingerprint: randomUUID(),
+          capabilities: {
+            host_name: data.host_name,
+            development: false,
+            workspace: false,
+            remote_mcp: true,
+          },
+        },
         token,
-        expires_at: node.expires_at,
-        participant_id: participant.id,
-        room_id: room.id,
-        state: "pending",
-      };
+        pairing,
+        room,
+      );
     });
   }
   async node(db, token, { sessionId } = {}) {
@@ -260,6 +305,7 @@ export class AgentService {
         .rows[0].status === "banned"
     )
       fail(403, "设备所属账号已被封禁。");
+    n.expected_session_id = sessionId;
     return n;
   }
   async nodeSeat(db, n, { approved = true, write = false } = {}) {
@@ -274,6 +320,16 @@ export class AgentService {
       write,
     });
     await this.enabled(db, n.owner_user_id, room.id);
+    const current = (
+      await db.query("select * from agent_nodes where id=$1", [n.id])
+    ).rows[0];
+    if (
+      !current ||
+      current.revoked_at ||
+      new Date(current.expires_at) <= new Date() ||
+      (n.expected_session_id && current.session_id !== n.expected_session_id)
+    )
+      fail(401, "设备凭据或连接已失效。");
     if (
       approved &&
       (seat.state !== "approved" || seat.status !== "active" || seat.muted)
@@ -283,14 +339,39 @@ export class AgentService {
       fail(403, "联机席位已撤销。");
     return { ...seat, room };
   }
-  async connect(token) {
+  async connect(token, { transport = "wire", clientId, resume } = {}) {
     return this.transaction(async (db) => {
       const n = await this.node(db, token),
-        s = await this.nodeSeat(db, n, { approved: false }),
-        sessionId = randomUUID();
+        s = await this.nodeSeat(db, n, { approved: false });
+      if ((transport === "remote-mcp") !== (n.capabilities.remote_mcp === true))
+        fail(
+          403,
+          "此设备凭据不能用于其它接入方式，请为该 Agent 单独生成连接。",
+        );
+      // 先锁房间，再读设备行；所有入口采用同一顺序，避免并发抢占和死锁。
+      const current = (
+        await db.query(
+          "select *,last_seen_at>now()-interval '45 seconds' live from agent_nodes where id=$1 for update",
+          [n.id],
+        )
+      ).rows[0];
+      const resuming =
+        transport === "remote-mcp" &&
+        resume &&
+        current.session_id === id.parse(resume) &&
+        current.connection_client_id === id.parse(clientId);
+      if (current.session_id && current.live && !resuming) {
+        const e = new AgentError(
+          409,
+          "此席位已有在线客户端，不能抢占连接。请复用原连接或生成独立席位。",
+        );
+        if (transport === "wire") e.retryAfter = 46;
+        throw e;
+      }
+      const sessionId = resuming ? current.session_id : randomUUID();
       await db.query(
-        "update agent_nodes set session_id=$2,last_seen_at=now() where id=$1",
-        [n.id, sessionId],
+        "update agent_nodes set session_id=$2,last_seen_at=now(),connection_transport=$3,connection_client_id=$4,ready_until=null where id=$1",
+        [n.id, sessionId, transport, clientId || null],
       );
       if (s.state === "approved")
         await db.query(
@@ -318,7 +399,7 @@ export class AgentService {
     return this.transaction(async (db) => {
       const n = await this.node(db, token, { sessionId });
       const cleared = await db.query(
-        "update agent_nodes set last_seen_at=null,session_id=null where id=$1 and session_id=$2 returning id",
+        "update agent_nodes set last_seen_at=null,session_id=null,ready_until=null,connection_client_id=null where id=$1 and session_id=$2 returning id",
         [n.id, sessionId],
       );
       if (!cleared.rowCount) return;
@@ -342,7 +423,13 @@ export class AgentService {
       const { room, member } = await this.room(db, roomId, userId);
       const seats = (
         await db.query(
-          "select s.*,p.display_name,p.status,p.type,p.last_active_at,n.name node_name,n.adapter,n.capabilities,n.owner_user_id,n.expires_at,n.revoked_at,n.last_seen_at,n.fingerprint,coalesce((select kind from agent_turns j where j.participant_id=p.id and j.status='leased'),'idle') activity from agent_seats s join participants p on p.id=s.participant_id join agent_nodes n on n.id=s.node_id where p.room_id=$1 and s.deleted_at is null order by s.created_at",
+          `select s.*,p.display_name,p.status,p.type,p.last_active_at,n.name node_name,n.adapter,n.capabilities,n.owner_user_id,
+           o.display_name owner_name,n.expires_at,n.revoked_at,n.last_seen_at,n.fingerprint,n.connection_transport,
+           (n.session_id is not null and n.revoked_at is null and n.expires_at>now() and n.last_seen_at>now()-interval '45 seconds') is_connected,
+           coalesce(n.ready_until>now(),false) model_ready,
+           coalesce((select kind from agent_turns j where j.participant_id=p.id and j.status='leased'),'idle') activity
+           from agent_seats s join participants p on p.id=s.participant_id join agent_nodes n on n.id=s.node_id
+           join profiles o on o.id=n.owner_user_id where p.room_id=$1 and s.deleted_at is null order by s.created_at`,
           [roomId],
         )
       ).rows;
@@ -390,7 +477,7 @@ export class AgentService {
       ).rows;
       const pairings = (
         await db.query(
-          "select id,expires_at,used_at,revoked_at,owner_user_id from agent_pairings where room_id=$1 and expires_at>now() order by created_at desc",
+          "select p.id,p.expires_at,p.used_at,p.revoked_at,p.owner_user_id,p.download_started_at,o.display_name owner_name from agent_pairings p join profiles o on o.id=p.owner_user_id where p.room_id=$1 and p.expires_at>now() order by p.created_at desc",
           [roomId],
         )
       ).rows;
@@ -1162,13 +1249,19 @@ export class AgentService {
       return { ok: true };
     });
   }
-  async nodeSync(token, sessionId, after = 0, active = null) {
+  async nodeSync(token, sessionId, after = 0, active = null, accepting) {
     return this.transaction(async (db) => {
       const n = await this.node(db, token, { sessionId }),
         seat = await this.nodeSeat(db, n, { approved: false });
-      await db.query("update agent_nodes set last_seen_at=now() where id=$1", [
-        n.id,
-      ]);
+      // 兼容旧客户端，但未知就绪状态不冒充模型在线。后台 Gateway 不延长 ready_until。
+      await db.query(
+        "update agent_nodes set last_seen_at=now(),ready_until=case when $2::boolean is null then ready_until when $2 then now()+interval '35 seconds' else null end where id=$1 and session_id=$3",
+        [
+          n.id,
+          accepting === undefined ? null : z.boolean().parse(accepting),
+          sessionId,
+        ],
+      );
       if (seat.state === "approved")
         await db.query(
           "update participants set last_active_at=now() where id=$1",
@@ -1195,6 +1288,7 @@ export class AgentService {
           !job ||
           job.status !== "leased" ||
           job.lease_hash !== digest(active.lease || "") ||
+          new Date(job.lease_until) <= new Date() ||
           seat.muted ||
           new Date(job.hard_deadline) <= new Date()
         )
@@ -1224,7 +1318,7 @@ export class AgentService {
       };
     });
   }
-  async claim(token, sessionId) {
+  async claim(token, sessionId, remote = null) {
     return this.transaction(async (db) => {
       const n = await this.node(db, token, { sessionId }),
         seat = await this.nodeSeat(db, n, { write: true });
@@ -1244,6 +1338,8 @@ export class AgentService {
         )
       ).rows[0];
       if (!turn) return null;
+      if (remote && turn.kind === "develop")
+        fail(403, "远程连接未授权本机执行，请使用本地 MCP 客户端开发。");
       if (turn.session_id) {
         const session = (
           await db.query("select * from collaboration_sessions where id=$1", [
@@ -1265,12 +1361,18 @@ export class AgentService {
             fail(409, "需求对齐已失效，禁止开始开发。");
         }
       }
-      const lease = secret(),
+      const lease = remote?.lease || secret(),
         seconds = turn.kind === "develop" ? 1200 : 300;
       const job = (
         await db.query(
-          "update agent_turns set status='leased',attempt=attempt+1,lease_hash=$2,lease_until=now()+interval '45 seconds',hard_deadline=now()+make_interval(secs=>$3) where id=$1 returning *",
-          [turn.id, digest(lease), seconds],
+          "update agent_turns set status='leased',attempt=attempt+1,lease_hash=$2,lease_until=now()+interval '45 seconds',hard_deadline=now()+make_interval(secs=>$3),remote_delivery_id=$4,remote_connection_id=$5 where id=$1 returning *",
+          [
+            turn.id,
+            digest(lease),
+            seconds,
+            remote?.deliveryId || null,
+            remote ? sessionId : null,
+          ],
         )
       ).rows[0];
       if (turn.task_id) {
@@ -1732,11 +1834,16 @@ export class AgentService {
       return { ok: true };
     });
   }
-  async nodeDownload(token, fileId) {
+  async nodeDownload(token, fileId, sessionId, maxBytes = Infinity) {
     return this.transaction(async (db) => {
-      const n = await this.node(db, token),
+      const n = await this.node(db, token, { sessionId }),
         seat = await this.nodeSeat(db, n);
       const file = await this.file(db, seat.room_id, id.parse(fileId));
+      if (Number(file.size) > maxBytes)
+        fail(
+          413,
+          "此文档超过远程工具 256 KiB 限制，请使用本地客户端读取完整文件。",
+        );
       return { file, bytes: await this.storage.loadFile(file.storage_path) };
     });
   }

@@ -252,6 +252,8 @@ export class IslandNode {
         }
         if (packet.type === "welcome") {
           welcomed = true;
+          this.hasConnected = true;
+          this.leaseConflictRetried = false;
           this.retry = 500;
           void this.updateStatus({ ...packet.data, connected: true }).catch(
             () => this.log("本机连接状态暂时无法保存。"),
@@ -286,9 +288,22 @@ export class IslandNode {
       });
       ws.on("unexpected-response", (request, response) => {
         if (response.statusCode === 409) {
-          this.connectionConflict = true;
-          this.log("此席位已有在线客户端，保留原连接，本次不抢占、不重试。");
-          this.stop();
+          if (
+            this.hasConnected &&
+            !this.leaseConflictRetried &&
+            response.headers["retry-after"] === "46"
+          ) {
+            // Gateway 非正常退出可能留下 45 秒数据库租约；原客户端只等待一次，不抢占。
+            this.leaseConflictRetried = true;
+            this.retry = 46000;
+            this.log(
+              "原连接可能仍有有效租约，等待 46 秒后仅重试一次；不抢占其它客户端。",
+            );
+          } else {
+            this.connectionConflict = true;
+            this.log("此席位已有在线客户端，保留原连接，本次不抢占、不重试。");
+            this.stop();
+          }
         }
         if ([401, 403].includes(response.statusCode)) {
           this.log("设备凭据无效或已撤销，需要重新配对。");
@@ -322,6 +337,9 @@ export class IslandNode {
     this.ticking = true;
     try {
       const state = await this.rpc("sync", {
+        accepting:
+          Boolean(this.active) ||
+          (this.adapter.accepting ? this.adapter.accepting() : true),
         cursor: this.cursor,
         active: this.active
           ? { id: this.active.job.id, lease: this.active.job.lease }
