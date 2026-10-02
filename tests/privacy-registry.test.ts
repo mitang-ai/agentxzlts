@@ -179,7 +179,101 @@ describe.sequential("程序级发送边界与用户级 Agent 注册", () => {
       false,
     );
   });
-  it("所有消息先过统一检测，未确认不出现在房间；只有本人可放行且幂等", async () => {
+  it("默认消息自动发布且不重复，文件审核默认关闭；程序检测不随人工审核关闭", async () => {
+    const mine = (await service.myAgents(users[0])).nodes.find(
+      (n: any) => n.id === node.node_id,
+    );
+    expect(mine).toMatchObject({
+      privacy_mode: "filtered",
+      file_review: false,
+    });
+    expect(await service.policy()).toMatchObject({
+      force_review: false,
+      force_file_review: false,
+    });
+    const j = await job();
+    await expect(
+      service.complete(
+        node.token,
+        j.id,
+        j.lease,
+        { message: "/home/private-test/not-public" },
+        connection.session_id,
+      ),
+    ).rejects.toMatchObject({ status: 400 });
+    const result = { message: "默认直接发送的安全回复" };
+    const published = await service.complete(
+      node.token,
+      j.id,
+      j.lease,
+      result,
+      connection.session_id,
+    );
+    expect(published.pending_review).not.toBe(true);
+    expect((await service.myAgents(users[0])).reviews).toHaveLength(0);
+    expect(
+      (
+        await service.complete(
+          node.token,
+          j.id,
+          j.lease,
+          result,
+          connection.session_id,
+        )
+      ).duplicate,
+    ).toBe(true);
+    expect(
+      (
+        await pool.query(
+          "select count(*)::int n from messages where client_message_id=$1",
+          [j.id],
+        )
+      ).rows[0].n,
+    ).toBe(1);
+  });
+  it("消息与文件审核可独立开启、关闭，只有所有者能设置，资料修改不重置审核", async () => {
+    await expect(
+      service.updateAgent(users[1], {
+        node_id: node.node_id,
+        agent_name: "越权",
+        privacy_mode: "review",
+        file_review: true,
+      }),
+    ).rejects.toMatchObject({ status: 404 });
+    const settings = async () =>
+      (await service.myAgents(users[0])).nodes.find(
+        (n: any) => n.id === node.node_id,
+      );
+    await service.updateAgent(users[0], {
+      node_id: node.node_id,
+      agent_name: "共同开发者",
+      privacy_mode: "filtered",
+      file_review: true,
+    });
+    expect(await settings()).toMatchObject({
+      privacy_mode: "filtered",
+      file_review: true,
+    });
+    await service.updateAgent(users[0], {
+      node_id: node.node_id,
+      agent_name: "共同开发者",
+      privacy_mode: "review",
+      file_review: false,
+    });
+    expect(await settings()).toMatchObject({
+      privacy_mode: "review",
+      file_review: false,
+    });
+    await service.updateAgent(users[0], {
+      node_id: node.node_id,
+      agent_name: "共同开发者",
+    });
+    expect(await settings()).toMatchObject({
+      privacy_mode: "review",
+      file_review: false,
+    });
+  });
+  it("开启消息审核后未确认不出现在房间；只有本人可放行且幂等", async () => {
     const j = await job();
     expect(j).toBeTruthy();
     await expect(
@@ -219,6 +313,24 @@ describe.sequential("程序级发送边界与用户级 Agent 注册", () => {
         ])
       ).rows[0],
     ).toMatchObject({ result: null, status: "awaiting_review" });
+    await service.updateAgent(users[0], {
+      node_id: node.node_id,
+      agent_name: "共同开发者",
+      privacy_mode: "filtered",
+    });
+    // Turning review off only affects later submissions, not already-private content.
+    expect(
+      (await service.myAgents(users[0])).reviews.some(
+        (r: any) => r.id === staged.review_id,
+      ),
+    ).toBe(true);
+    expect(
+      (
+        await pool.query("select 1 from messages where client_message_id=$1", [
+          j.id,
+        ])
+      ).rowCount,
+    ).toBe(0);
     expect(await service.claim(node.token, connection.session_id)).toBeNull();
     await expect(
       service.selectAgentRoom(users[0], {
@@ -266,6 +378,11 @@ describe.sequential("程序级发送边界与用户级 Agent 注册", () => {
         )
       ).rows[0].payload_cipher,
     ).toBe("");
+    await service.updateAgent(users[0], {
+      node_id: node.node_id,
+      agent_name: "共同开发者",
+      privacy_mode: "review",
+    });
   });
   it("主持人不能代替其他所有者审批；撤销或静音后旧审核不能恢复发送", async () => {
     const j = await job(),
@@ -463,8 +580,8 @@ describe.sequential("程序级发送边界与用户级 Agent 注册", () => {
       const j = await service.claim(n.token, conn.session_id);
       // Changing the floor affects an already-connected device, not just new connections.
       await service.adminPolicy(users[1], {
-        value: original,
-        reason: "恢复强制本人发送确认",
+        value: { ...original, force_review: true, force_file_review: true },
+        reason: "启用强制本人发送确认",
       });
       expect(
         (
@@ -477,6 +594,13 @@ describe.sequential("程序级发送边界与用户级 Agent 注册", () => {
           )
         ).pending_review,
       ).toBe(true);
+      await expect(
+        service.updateAgent(users[0], {
+          node_id: n.node_id,
+          agent_name: "自动发送选择",
+          file_review: false,
+        }),
+      ).rejects.toMatchObject({ status: 403 });
       const report = await service.adminPolicy(users[1]);
       expect(report).not.toHaveProperty("reviews");
       expect(report.counts.length).toBeGreaterThan(0);

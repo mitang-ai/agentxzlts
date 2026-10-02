@@ -180,11 +180,7 @@ test("浏览器生成专属远程配置，跨用户查看席位，真实 MCP HTT
       delivery_id: delivery.delivery_id,
       result: { message: "独立远程通道回传成功（协议验收）" },
     });
-    expect(staged.pending_review).toBe(true);
-    await post(context, "/api/my-agents/review", {
-      id: staged.review_id,
-      approve: true,
-    });
+    expect(staged.pending_review).not.toBe(true);
     await expect(
       page
         .getByRole("log", { name: "聊天消息" })

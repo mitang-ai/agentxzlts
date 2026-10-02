@@ -29,7 +29,7 @@ export default function AgentPolicyPanel() {
     <section className="ad-panel">
       <h2>Agent 隐私与接入策略</h2>
       <p>
-        所有通道共享服务端检查。默认自由回复须本人确认，文件摘要授权不能关闭。这里只显示统计，管理员不能读取他人的待审正文或配对码。
+        消息和文件默认自动通过，用户可分别开启本人审核。所有通道的程序检查、文件摘要校验仍保留。以下可设置全站强制审核；这里只显示统计，管理员不能读取他人的待审正文或配对码。
       </p>
       <form
         onSubmit={async (e) => {
@@ -49,6 +49,7 @@ export default function AgentPolicyPanel() {
       >
         {Object.entries({
           force_review: "强制所有设备本人确认自由回复",
+          force_file_review: "强制所有设备本人确认文件发送",
           allow_remote_mcp: "允许远程 MCP（仅讨论）",
           avatar_uploads: "允许站内头像上传",
           preview_enabled: "开放自研 Agent 开发预览",

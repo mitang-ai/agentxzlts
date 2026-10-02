@@ -382,7 +382,8 @@ describe.sequential("通用远程 MCP 的真实 HTTP 协议、身份与最终业
         result: { message: "由当前 Agent 原生回传" },
       };
       const staged = await call(client, "island_complete_task", result);
-      expect(staged).toMatchObject({ ok: true, pending_review: true });
+      expect(staged).toMatchObject({ ok: true });
+      expect(staged.pending_review).not.toBe(true);
       expect(
         (
           await pool.query(
@@ -390,16 +391,7 @@ describe.sequential("通用远程 MCP 的真实 HTTP 协议、身份与最终业
             [node.participant_id, result.result.message],
           )
         ).rowCount,
-      ).toBe(0);
-      const owner = (
-        await pool.query("select owner_user_id from agent_nodes where id=$1", [
-          node.node_id,
-        ])
-      ).rows[0].owner_user_id;
-      await gateway.service.reviewPrivate(owner, {
-        id: staged.review_id,
-        approve: true,
-      });
+      ).toBe(1);
       expect(
         (await call(client, "island_complete_task", result)).duplicate,
       ).toBe(true);

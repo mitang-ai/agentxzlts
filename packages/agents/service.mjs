@@ -1969,7 +1969,7 @@ export class AgentService {
       if (!permit || permit.payload_hash !== digest(bytes))
         fail(
           403,
-          "请先由设备所有者批准此份成果的 SHA-256；未经同意不接收文件正文。",
+          "请先申请此份成果的 SHA-256 发送许可；开启文件审核时须由设备所有者批准。",
         );
       const approved = await this.vault.open(
         permit.payload_cipher,
@@ -1990,7 +1990,7 @@ export class AgentService {
         manifest.changes.length !== approved.paths.length ||
         manifest.changes.some((c) => !approved.paths.includes(c.path))
       )
-        fail(400, "文件清单与本人批准的内容不一致。");
+        fail(400, "文件清单与发送许可的内容不一致。");
       if (artifactFindings(files).length)
         fail(
           400,

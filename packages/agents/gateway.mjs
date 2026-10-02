@@ -179,7 +179,10 @@ export function attachGateway(server, pool, storage, env = process.env) {
           (await service.artifactPermit(token, turn, lease)).status !==
           "approved"
         )
-          throw new AgentError(403, "文件正文上传前需要设备所有者确认。");
+          throw new AgentError(
+            403,
+            "文件正文上传前需要有效发送许可；开启文件审核时请由本人确认。",
+          );
         const bytes = await drain(
           req,
           (await service.policy()).artifact_mb * 1024 * 1024,

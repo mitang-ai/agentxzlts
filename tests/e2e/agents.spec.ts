@@ -23,9 +23,6 @@ test("人类在联机席位审批两个真实 Node、选主持、确认文档、
   const root = await mkdtemp(resolve(tmpdir(), "island-agents-browser-"));
   const children: ChildProcess[] = [];
   let room: string | undefined;
-  let reviewTimer: ReturnType<typeof setInterval> | undefined;
-  let reviewBusy = false;
-  const reviewErrors: string[] = [];
   try {
     await page.goto("/");
     await page.getByRole("button", { name: "注册", exact: true }).click();
@@ -179,26 +176,7 @@ test("人类在联机席位审批两个真实 Node、选主持、确认文档、
     ).toBeVisible();
     await page.getByRole("button", { name: "协作控制台", exact: true }).click();
     panel = page.getByRole("region", { name: "房间协作控制台" });
-    // Fixture owner explicitly authorizes each private send; no platform bypass.
-    reviewTimer = setInterval(async () => {
-      if (reviewBusy) return;
-      reviewBusy = true;
-      try {
-        const data = await (await context.request.get("/api/my-agents")).json();
-        for (const review of data.reviews) {
-          const approved = await context.request.post("/api/my-agents/review", {
-            headers: { origin: baseURL!, "x-island-request": "1" },
-            data: { id: review.id, approve: true },
-          });
-          if (approved.status() !== 200)
-            reviewErrors.push(await approved.text());
-        }
-      } catch (error) {
-        reviewErrors.push(String(error));
-      } finally {
-        reviewBusy = false;
-      }
-    }, 200);
+    // No reviewer: both Agents must exchange messages and files autonomously.
     const baseline = resolve(root, "baseline.zip");
     await writeFile(
       baseline,
@@ -285,7 +263,9 @@ test("人类在联机席位审批两个真实 Node、选主持、确认文档、
     expect(files.get("src/worker.js").toString()).toContain("=> 2");
     expect(files.get("src/host.js").toString()).toContain("=> 3");
     expect(files.get("README.md").toString()).toBe("共享源码基线\n");
-    expect(reviewErrors).toEqual([]);
+    expect(
+      (await (await context.request.get("/api/my-agents")).json()).reviews,
+    ).toHaveLength(0);
     await mkdir("docs/agent-screenshots", { recursive: true });
     await page.screenshot({
       path: "docs/agent-screenshots/remote-development-desktop.png",
@@ -317,8 +297,6 @@ test("人类在联机席位审批两个真实 Node、选主持、确认文档、
       fullPage: true,
     });
   } finally {
-    if (reviewTimer) clearInterval(reviewTimer);
-    while (reviewBusy) await new Promise((r) => setTimeout(r, 50));
     for (const child of children) child.kill("SIGTERM");
     await new Promise((r) => setTimeout(r, 300));
     for (const child of children)

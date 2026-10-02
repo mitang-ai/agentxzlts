@@ -166,20 +166,23 @@ function AgentProfile({
   node,
   refresh,
   forceReview,
+  forceFileReview,
 }: {
   node: Row;
   refresh: () => Promise<void>;
   forceReview: boolean;
+  forceFileReview: boolean;
 }) {
   const [name, setName] = useState(node.agent_name),
     [avatar, setAvatar] = useState<string | null>(node.avatar_url),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
     [mode, setMode] = useState(node.privacy_mode),
+    [fileReview, setFileReview] = useState(Boolean(node.file_review)),
     [avatarBusy, setAvatarBusy] = useState(false);
   return (
     <details>
-      <summary>编辑昵称与头像</summary>
+      <summary>昵称、头像与审核设置</summary>
       <AvatarEditor
         value={avatar}
         onChange={setAvatar}
@@ -196,21 +199,30 @@ function AgentProfile({
         />
       </label>
       <label>
-        发送保护
-        <select
-          aria-label="发送保护模式"
-          value={forceReview ? "review" : mode}
+        <input
+          type="checkbox"
+          aria-label="消息发送前由我审核"
+          checked={forceReview || mode === "review"}
           disabled={forceReview}
-          onChange={(e) => setMode(e.target.value)}
-        >
-          <option value="review">每条自由回复由本人确认</option>
-          <option value="filtered">
-            升级客户端过滤后自动发送（仍拦截风险）
-          </option>
-        </select>
+          onChange={(e) => setMode(e.target.checked ? "review" : "filtered")}
+        />
+        消息发送前由我审核
+      </label>
+      <label>
+        <input
+          type="checkbox"
+          aria-label="文件发送前由我审核"
+          checked={forceFileReview || fileReview}
+          disabled={forceFileReview}
+          onChange={(e) => setFileReview(e.target.checked)}
+        />
+        文件发送前由我审核
       </label>
       <small>
-        平台要求本人确认时不能关闭；自动模式不能保证识别语义隐私，慎用。
+        默认自动通过，让 Agent
+        连续协作。可分别开启，保存后影响后续提交；已有待审不会自动公开。程序检查始终保留，但不能识别全部隐私。
+        {(forceReview || forceFileReview) &&
+          " 管理员要求审核的项目暂不能关闭。"}
       </small>
       <button
         className="secondary compact"
@@ -223,6 +235,7 @@ function AgentProfile({
               agent_name: name,
               avatar_url: avatar,
               privacy_mode: forceReview ? "review" : mode,
+              file_review: forceFileReview || fileReview,
             });
             await refresh();
           } catch (e) {
@@ -415,7 +428,9 @@ export default function MyAgents({
       <section className="agent-card">
         <h2>隐私发送护栏</h2>
         <p>
-          本机客户端先检查、脱敏再发送；服务端所有接入方式统一拦截疑似密钥、真实路径和私网信息。默认每条自由回复由你确认，文件必须先批准指定内容摘要才上传。
+          本机客户端先检查、脱敏再发送；服务端统一拦截疑似密钥、真实路径和私网信息。消息与文件默认自动通过，不打断
+          Agent 交流。你可在各 Agent
+          的设置中分别开启人工审核；文件始终核对清单与内容摘要。
         </p>
         <p>
           这里保护的是协作岛发送边界，不代表已经限制第三方 Agent
@@ -445,6 +460,18 @@ export default function MyAgents({
                     ? "设备已连接"
                     : "设备未连接"}
               </span>
+              {!n.revoked_at && (
+                <small>
+                  消息
+                  {data.policy.force_review || n.privacy_mode === "review"
+                    ? "需审核"
+                    : "自动通过"}{" "}
+                  · 文件
+                  {data.policy.force_file_review || n.file_review
+                    ? "需审核"
+                    : "自动通过"}
+                </small>
+              )}
               <small>
                 {n.platform_scope ? "协作岛级身份" : "旧版单房间身份"} ·{" "}
                 {n.adapter}
@@ -456,6 +483,7 @@ export default function MyAgents({
                   node={n}
                   refresh={refresh}
                   forceReview={data.policy.force_review}
+                  forceFileReview={Boolean(data.policy.force_file_review)}
                 />
                 {n.platform_scope && (
                   <div className="agent-actions">

@@ -458,7 +458,7 @@ describe.sequential("真实远端 Agent 权限、有界主持、需求对齐与�
         developWorker.lease,
         bad,
       ),
-    ).rejects.toThrow("所有者批准");
+    ).rejects.toThrow("发送许可");
     await expect(
       unpackArtifact(
         bad,
@@ -481,12 +481,32 @@ describe.sequential("真实远端 Agent 权限、有界主持、需求对齐与�
       { brief_hash: brief.content_hash, task_id: developWorker.task_id },
       ["src/worker.js"],
     );
+    await service.updateAgent(users[1], {
+      node_id: worker.node_id,
+      agent_name: "开发设备",
+      file_review: true,
+    });
     const permit = await service.proposeArtifact(
       worker.token,
       developWorker.id,
       developWorker.lease,
       { sha256: digest(bytes), size: bytes.length, paths: ["src/worker.js"] },
     );
+    expect(permit).toMatchObject({
+      status: "pending",
+      approval_mode: "manual",
+    });
+    await expect(
+      service.uploadArtifact(
+        worker.token,
+        developWorker.id,
+        developWorker.lease,
+        bytes,
+      ),
+    ).rejects.toThrow("发送许可");
+    await expect(
+      service.reviewPrivate(users[0], { id: permit.review_id, approve: true }),
+    ).rejects.toMatchObject({ status: 404 });
     await service.reviewPrivate(users[1], {
       id: permit.review_id,
       approve: true,
@@ -529,10 +549,18 @@ describe.sequential("真实远端 Agent 权限、有界主持、需求对齐与�
         paths: ["src/host.js"],
       },
     );
-    await service.reviewPrivate(users[0], {
-      id: hostPermit.review_id,
-      approve: true,
+    expect(hostPermit).toMatchObject({
+      status: "approved",
+      approval_mode: "auto",
     });
+    await expect(
+      service.uploadArtifact(
+        chair.token,
+        developChair.id,
+        developChair.lease,
+        Buffer.concat([hostBytes, Buffer.from("changed")]),
+      ),
+    ).rejects.toThrow("发送许可");
     artifactChair = await service.uploadArtifact(
       chair.token,
       developChair.id,
