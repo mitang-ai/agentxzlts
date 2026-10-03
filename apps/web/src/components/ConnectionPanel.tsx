@@ -1,11 +1,9 @@
 "use client";
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   Bot,
-  Monitor,
   Trash2,
   Plus,
-  Copy,
   Download,
   Crown,
   VolumeX,
@@ -22,7 +20,6 @@ import { ParticipantAvatar } from "@island/ui";
 import type { RoomState } from "@island/protocol";
 import { api, size } from "@/lib/client";
 import "./connections.css";
-import RemoteConnection from "./RemoteConnection";
 type Row = Record<string, any>;
 function BriefFiles({
   title,
@@ -80,11 +77,6 @@ function BriefFiles({
     </div>
   );
 }
-function connectionPrompt(origin: string, pairing: Row, _development: boolean) {
-  return (
-    "请帮我阅读并按说明安装、连接协作岛：" + origin + pairing.document_path
-  );
-}
 const stages: Record<string, string> = {
   discussing: "主持讨论",
   aligning: "对齐需求与分工",
@@ -128,9 +120,6 @@ export default function ConnectionPanel({
     [data, setData] = useState<Row | null>(null),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
-    [pairing, setPairing] = useState<Row | null>(null),
-    [siteOrigin, setSiteOrigin] = useState(""),
-    [promptDevelopment, setPromptDevelopment] = useState(false),
     [requirements, setRequirements] = useState(""),
     [design, setDesign] = useState(""),
     [baseId, setBaseId] = useState(""),
@@ -144,7 +133,6 @@ export default function ConnectionPanel({
     [preview, setPreview] = useState<Row | null>(null),
     [resolutions, setResolutions] = useState<Record<string, string>>({}),
     [mergeConfirmed, setMergeConfirmed] = useState(false);
-  const copying = useRef(false);
   const refresh = useCallback(async () => {
     try {
       setData(await api<Row>(`rooms/${roomId}/agents`));
@@ -152,22 +140,6 @@ export default function ConnectionPanel({
       setError((e as Error).message);
     }
   }, [roomId]);
-  useEffect(() => {
-    setSiteOrigin(window.location.origin);
-    setPairing(null);
-    setPromptDevelopment(false);
-  }, [roomId]);
-  useEffect(() => {
-    if (
-      pairing &&
-      (new Date(pairing.expires_at).getTime() <= Date.now() ||
-        data?.pairings?.some(
-          (row: Row) =>
-            row.id === pairing.id && (row.used_at || row.revoked_at),
-        ))
-    )
-      setPairing(null);
-  }, [pairing, data?.pairings]);
   useEffect(() => {
     void refresh();
     const timer = setInterval(() => void refresh(), 3000);
@@ -298,41 +270,6 @@ export default function ConnectionPanel({
     setDraft(
       draft.map((row, i) => (i === index ? { ...row, [key]: value } : row)),
     );
-  const prompt =
-    pairing && siteOrigin
-      ? connectionPrompt(siteOrigin, pairing, promptDevelopment)
-      : "";
-  const copyText = async (text: string, success: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      notify(success);
-    } catch {
-      notify("浏览器未允许自动复制，请选中下方文本手动复制。");
-    }
-  };
-  const copyConnectionPrompt = async () => {
-    if (copying.current || busy) return;
-    copying.current = true;
-    setBusy(true);
-    setError("");
-    try {
-      const current = await api<Row>(`my-agents/pairing`, {
-        development: promptDevelopment,
-      });
-      if (!current) return;
-      setPairing(current);
-      await copyText(
-        connectionPrompt(window.location.origin, current, promptDevelopment),
-        "新的连接提示词已复制，直接交给要连接的 Agent。",
-      );
-      await refresh();
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      copying.current = false;
-      setBusy(false);
-    }
-  };
   if (!data)
     return (
       <div className="connection-panel">
@@ -348,7 +285,7 @@ export default function ConnectionPanel({
         <header className="connection-title">
           <div>
             <h2>联机席位</h2>
-            <p>让不同设备上的 Agent 加入同一个房间，在各自本地完成工作。</p>
+            <p>房间只审批已登记的 Agent，不单独创建连接。</p>
           </div>
           <button
             className="icon-button"
@@ -363,148 +300,15 @@ export default function ConnectionPanel({
             {error}
           </p>
         )}
-        <div className="connection-guide">
-          <Monitor size={21} />
-          <div>
-            <strong>连接自己的 Agent</strong>
-            <p>
-              复制一键连接提示词，交给另一台设备上的
-              Agent，它会自行下载、安装并申请加入房间，随后等待人类管理者批准。
-              每次复制都会生成独立连接，连接下一个 Agent 时再次点击复制即可。
-            </p>
-            <label className="connection-check">
-              <input
-                type="checkbox"
-                checked={promptDevelopment}
-                onChange={(event) => setPromptDevelopment(event.target.checked)}
-              />
-              允许此 Agent 在本机专用工作目录内开发（仍需批准聊天室任务）
-            </label>
-            {siteOrigin &&
-              /^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::|$)/.test(
-                siteOrigin,
-              ) && (
-                <p>
-                  当前地址仅供本机连接；异地设备请从可访问的 HTTPS
-                  网站打开本房间后复制提示词。
-                </p>
-              )}
-            <div className="connection-actions">
-              <button
-                className="primary compact"
-                disabled={busy || !state.capabilities?.agents}
-                onClick={() => void copyConnectionPrompt()}
-              >
-                <Copy size={15} />
-                复制一键连接提示词
-              </button>
-              <a
-                className="secondary compact"
-                href={`/api/rooms/${roomId}/agents/client`}
-              >
-                <Download size={15} />
-                下载 Node 客户端
-              </a>
-            </div>
-            {prompt && (
-              <label>
-                一键连接提示词
-                <textarea
-                  aria-label="一键连接提示词"
-                  readOnly
-                  rows={2}
-                  value={prompt}
-                  onFocus={(event) => event.target.select()}
-                />
-                <small>
-                  每次复制自动生成新配对码，有效期以邀请显示为准。新 Agent
-                  在“我的 Agent”登记后添加到房间。每份提示词只交给一个 Agent；该
-                  Agent 重连时使用它原来保存的提示词。
-                </small>
-              </label>
-            )}
-          </div>
-        </div>
-        <RemoteConnection
-          key={roomId}
-          roomId={roomId}
-          disabled={busy || !state.capabilities?.agents}
-          refresh={refresh}
-          notify={notify}
-        />
-        {pairing && (
-          <div className="connection-pair-code">
-            <div>
-              <strong>一次性配对码</strong>
-              <small>
-                有效至{" "}
-                {new Date(pairing.expires_at).toLocaleTimeString("zh-CN")}
-                ，仅交给你要连接的设备。
-              </small>
-            </div>
-            <code>{pairing.code}</code>
-            <div className="connection-actions">
-              <button
-                className="secondary compact"
-                onClick={() => void copyText(pairing.code, "配对码已复制")}
-              >
-                <Copy size={14} />
-                复制配对码
-              </button>
-              <button
-                className="text-button"
-                disabled={busy}
-                onClick={async () => {
-                  setBusy(true);
-                  try {
-                    await api("my-agents/invitation", {
-                      id: pairing.id,
-                      action: "revoke",
-                    });
-                    setPairing(null);
-                  } catch (e) {
-                    setError((e as Error).message);
-                  } finally {
-                    setBusy(false);
-                  }
-                }}
-              >
-                撤销此码
-              </button>
-            </div>
-          </div>
-        )}
         <div className="room-console-note">
           <strong>从“我的 Agent”添加已连接的设备</strong>
           <p>
             不必每个房间重新安装。先登记，再选择此房间添加；原有单房间连接保持原权限。
           </p>
           <button className="secondary" onClick={openMyAgents}>
-            我的 Agent · 管理邀请与待审核发送
+            我的 Agent · 统一连接与审批
           </button>
         </div>
-        {data.pairings?.some((p: Row) => !p.used_at && !p.revoked_at) && (
-          <section
-            className="connection-invitations"
-            aria-label="房间成员的连接进度"
-          >
-            <strong>房间成员的连接进度</strong>
-            {data.pairings
-              .filter((p: Row) => !p.used_at && !p.revoked_at)
-              .map((p: Row) => (
-                <p key={p.id}>
-                  {p.owner_name} ·{" "}
-                  {p.download_started_at
-                    ? "已开始准备客户端（尚未连入）"
-                    : "已创建邀请，等待连接"}{" "}
-                  · 邀请 {p.id.slice(0, 8)}
-                </p>
-              ))}
-            <small>
-              仅展示当前房间的有效邀请，不显示配对码。生成邀请或下载客户端不代表模型在线。
-            </small>
-          </section>
-        )}
         {manager && removableSeats.length > 0 && (
           <div className="connection-actions seat-cleanup">
             <span>已撤销或拒绝的记录：{removableSeats.length}</span>
@@ -528,7 +332,7 @@ export default function ConnectionPanel({
         {data.seats.length ? (
           <div className="connection-seats">
             {data.seats.map((s: Row) => {
-              const online = s.is_connected === true;
+              const online = s.is_online === true;
               const host = s.participant_id === data.agent_host_participant_id;
               return (
                 <article
@@ -571,8 +375,8 @@ export default function ConnectionPanel({
                             : s.muted
                               ? "已静音"
                               : !online
-                                ? s.capabilities.remote_mcp
-                                  ? "助手未活动，需要用户唤醒"
+                                ? s.is_connected
+                                  ? "连接保持中 · 未监听任务（MCP 需手动领取）"
                                   : "设备离线"
                                 : s.activity === "idle"
                                   ? s.model_ready

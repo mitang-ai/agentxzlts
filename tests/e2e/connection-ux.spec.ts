@@ -43,6 +43,11 @@ test("连续复制自动换码、失效记录单删/清空、需求设计文件�
     ).rows[0].id;
     await page.getByRole("button", { name: "联机席位", exact: true }).click();
     let panel = page.getByRole("region", { name: "联机席位" });
+    await expect(
+      panel.getByRole("button", { name: "复制一键连接提示词", exact: true }),
+    ).toHaveCount(0);
+    await page.getByRole("button", { name: "我的 Agent", exact: true }).click();
+    const center = page.locator(".agent-center");
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     const pairings: any[] = [];
     // 必须在消费旧码之前再次复制，否则旧缓存行为也会通过测试。
@@ -52,14 +57,14 @@ test("连续复制自动换码、失效记录单删/清空、需求设计文件�
           r.url().endsWith(`/api/my-agents/pairing`) &&
           r.request().method() === "POST",
       );
-      await panel
-        .getByRole("button", { name: "复制一键连接提示词", exact: true })
+      await center
+        .getByRole("button", { name: "复制新 Agent 连接提示词", exact: true })
         .click();
       const pairing = await (await response).json();
       pairings.push(pairing);
       await expect(
-        panel.getByLabel("一键连接提示词", { exact: true }),
-      ).toHaveValue(new RegExp(pairing.id));
+        page.getByLabel("连接邀请 " + pairing.id, { exact: true }),
+      ).toBeVisible();
       await expect
         .poll(() => page.evaluate(() => navigator.clipboard.readText()))
         .toContain(pairing.id);
@@ -71,12 +76,18 @@ test("连续复制自动换码、失效记录单删/清空、需求设计文件�
         r.url().endsWith("/api/my-agents/pairing") &&
         r.request().method() === "POST",
     );
-    await panel
-      .getByRole("button", { name: "复制一键连接提示词", exact: true })
+    await center
+      .getByRole("button", { name: "复制新 Agent 连接提示词", exact: true })
       .click();
     const toRevoke = await (await fresh).json();
-    await panel.getByRole("button", { name: "撤销此码", exact: true }).click();
-    await expect(panel.locator(".connection-pair-code")).toHaveCount(0);
+    page.on("dialog", (dialog) => dialog.accept());
+    await page
+      .getByLabel("连接邀请 " + toRevoke.id, { exact: true })
+      .getByRole("button", { name: "撤销", exact: true })
+      .click();
+    await expect(
+      page.getByLabel("连接邀请 " + toRevoke.id, { exact: true }),
+    ).toContainText("已撤销");
     expect(
       (
         await context.request.post("/api/agent-node/client", {
@@ -111,12 +122,16 @@ test("连续复制自动换码、失效记录单删/清空、需求设计文件�
       );
       expect(attached.status()).toBe(200);
     }
+    await page
+      .locator(".room-list")
+      .getByRole("button", { name: /本地连接体验验收/ })
+      .click();
+    await page.getByRole("button", { name: "联机席位", exact: true }).click();
     await panel.getByRole("button", { name: "刷新联机席位" }).click();
     for (let i = 0; i < 3; i++)
       await panel
         .getByRole("button", { name: "批准 体验 Agent " + i, exact: true })
         .click();
-    page.on("dialog", (dialog) => dialog.accept());
     for (let i = 0; i < 2; i++)
       await panel
         .getByRole("button", {

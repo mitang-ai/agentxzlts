@@ -18,6 +18,12 @@ export class HostAdapter {
   accepting() {
     return this.waiters.size > 0;
   }
+  processing(taskId) {
+    return Boolean(
+      (this.pending?.job.id === taskId && this.pending.delivered) ||
+      (this.receipts.has(taskId) && !this.receipts.get(taskId).confirmed),
+    );
+  }
   async dispatch(job, { cwd, signal, documentPaths = [] }) {
     if (signal.aborted) throw Error("任务授权已停止。");
     return new Promise((resolve, reject) => {
@@ -34,6 +40,7 @@ export class HostAdapter {
         reject,
         signal,
         abort,
+        delivered: this.waiters.size > 0,
         payload: {
           task_id: job.id,
           delivery_id: delivery,
@@ -51,8 +58,13 @@ export class HostAdapter {
     });
   }
   async waitTask(seconds = 20, signal) {
-    if (this.pending) return this.pending.payload;
     if (signal?.aborted) return null;
+    if (this.pending) {
+      this.pending.delivered = true;
+      return this.pending.payload;
+    }
+    if (this.waiters.size)
+      throw Error("此宿主已有等待调用，不并发投递同一任务。");
     return new Promise((resolve) => {
       const done = (payload) => {
         clearTimeout(timer);

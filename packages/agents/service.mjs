@@ -459,6 +459,16 @@ export class AgentService {
           [n.id],
         )
       ).rows[0];
+      if (
+        !current ||
+        current.revoked_at ||
+        new Date(current.expires_at) <= new Date()
+      )
+        fail(401, "设备凭据已撤销或过期。");
+      // 大厅没有房间锁；注册设备在等行锁时可能刚被添加到房间。
+      // 不能用旧的大厅快照创建新连接，更不能在拿到设备锁后反向锁房间。
+      if (current.active_seat_id !== n.active_seat_id)
+        fail(503, "房间授权正在切换，请使用原配置稍后恢复连接。");
       const resuming =
         transport === "remote-mcp" &&
         resume &&
@@ -503,18 +513,27 @@ export class AgentService {
   async disconnected(token, sessionId) {
     return this.transaction(async (db) => {
       const n = await this.node(db, token, { sessionId });
-      const cleared = await db.query(
-        "update agent_nodes set last_seen_at=null,session_id=null,ready_until=null,connection_client_id=null where id=$1 and session_id=$2 returning id",
-        [n.id, sessionId],
-      );
-      if (!cleared.rowCount) return;
       const s = (
         await db.query(
           "select p.id,p.room_id from agent_seats s join participants p on p.id=s.participant_id where node_id=$1 and (not $2 or s.participant_id=$3)",
           [n.id, n.platform_scope, n.active_seat_id],
         )
       ).rows[0];
-      if (s) {
+      // 与心跳/房间删除采用同一锁序：room -> node -> participant。
+      // 先清设备再改 participant 会与 active_seat_id 的 ON DELETE SET NULL 互相死锁。
+      const roomPresent =
+        s &&
+        (
+          await db.query("select id from rooms where id=$1 for update", [
+            s.room_id,
+          ])
+        ).rowCount > 0;
+      const cleared = await db.query(
+        "update agent_nodes set last_seen_at=null,session_id=null,ready_until=null,connection_client_id=null where id=$1 and session_id=$2 returning id",
+        [n.id, sessionId],
+      );
+      if (!cleared.rowCount) return;
+      if (s && roomPresent) {
         await db.query(
           "update participants set last_active_at=null where id=$1",
           [s.id],
@@ -538,6 +557,12 @@ export class AgentService {
           [roomId],
         )
       ).rows;
+      for (const seat of seats)
+        seat.is_online =
+          seat.state === "approved" &&
+          !seat.muted &&
+          seat.is_connected &&
+          seat.model_ready;
       const brief =
         (
           await db.query(

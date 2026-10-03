@@ -19,6 +19,38 @@ export const policySchema = z
   })
   .strict();
 export const registryMethods = {
+  async lockNodeRooms(db, nodeId) {
+    const targets = (
+      await db.query(
+        "select distinct p.room_id from agent_seats s join participants p on p.id=s.participant_id where s.node_id=$1 order by p.room_id",
+        [nodeId],
+      )
+    ).rows;
+    for (const row of targets)
+      await db.query("select id from rooms where id=$1 for update", [
+        row.room_id,
+      ]);
+    const n = (
+      await db.query("select * from agent_nodes where id=$1 for update", [
+        nodeId,
+      ])
+    ).rows[0];
+    if (!n) fail(404, "设备不存在。");
+    const current = (
+      await db.query(
+        "select distinct p.room_id from agent_seats s join participants p on p.id=s.participant_id where s.node_id=$1 order by p.room_id",
+        [nodeId],
+      )
+    ).rows;
+    // 读房间集合与取得设备锁之间可能新增席位。此时回滚重试，不能反向追加房间锁。
+    if (
+      current.some(
+        (row) => !targets.some((target) => target.room_id === row.room_id),
+      )
+    )
+      fail(503, "设备房间授权正在变化，请稍后重试原操作。");
+    return n;
+  },
   async readEnrollment(pairingId, token, origin) {
     id.parse(pairingId);
     z.string().min(30).max(100).parse(token);
@@ -81,6 +113,7 @@ export const registryMethods = {
       const nodes = (
         await db.query(
           `select id,agent_name,adapter,avatar_url,platform_scope,active_seat_id,privacy_mode,file_review,created_at,expires_at,revoked_at,
+    coalesce(ready_until>now(),false) model_ready,
     (session_id is not null and revoked_at is null and expires_at>now() and last_seen_at>now()-interval '45 seconds') connected
     from agent_nodes where owner_user_id=$1 order by created_at desc`,
           [userId],
@@ -126,7 +159,28 @@ export const registryMethods = {
         r.payload = await this.vault.open(r.payload_cipher, `review:${r.id}`);
         delete r.payload_cipher;
       }
-      return { nodes, seats, invites, reviews, policy: await this.policy(db) };
+      // 入席审批属于房间人类主持人，不属于设备所有者；只返回公开资料，绝不共享私有发送审核。
+      const approvals = (
+        await db.query(
+          `select s.participant_id,p.room_id,r.name room_name,r.status room_status,p.display_name,n.agent_name,n.avatar_url,n.adapter,
+          o.display_name owner_name,s.created_at from agent_seats s
+          join participants p on p.id=s.participant_id join rooms r on r.id=p.room_id
+          join participants host on host.id=r.host_participant_id
+          join agent_nodes n on n.id=s.node_id join profiles o on o.id=n.owner_user_id
+          where host.user_id=$1 and host.type='human' and host.status='active'
+          and r.status<>'deleted' and s.state='pending' and s.deleted_at is null
+          and n.revoked_at is null and n.expires_at>now() order by s.created_at`,
+          [userId],
+        )
+      ).rows;
+      return {
+        nodes,
+        seats,
+        invites,
+        reviews,
+        approvals,
+        policy: await this.policy(db),
+      };
     });
   },
   async updateAgent(userId, input) {
@@ -143,7 +197,8 @@ export const registryMethods = {
     if (privacyFindings(d.agent_name).length)
       fail(400, "昵称不能包含本机路径或凭据。");
     return this.transaction(async (db) => {
-      const n = await this.ownedNode(db, userId, d.node_id);
+      await this.ownedNode(db, userId, d.node_id);
+      const n = await this.lockNodeRooms(db, d.node_id);
       await this.verifyAvatar(db, userId, d.avatar_url);
       const policy = await this.policy(db),
         mode = d.privacy_mode ?? n.privacy_mode,
@@ -171,14 +226,17 @@ export const registryMethods = {
     return this.transaction(async (db) => {
       await this.room(db, roomId, userId, { write: true });
       await this.enabled(db, userId, roomId);
-      const n = await this.ownedNode(db, userId, nodeId);
+      await this.ownedNode(db, userId, nodeId);
+      const n = (
+        await db.query("select * from agent_nodes where id=$1 for update", [
+          nodeId,
+        ])
+      ).rows[0];
+      if (!n) fail(404, "设备不存在。");
       if (!n.platform_scope)
         fail(409, "此设备是旧版单房间连接，请在“我的 Agent”重新注册独立连接。");
       if (n.revoked_at || new Date(n.expires_at) <= new Date())
         fail(403, "设备已撤销或过期。");
-      await db.query("select id from agent_nodes where id=$1 for update", [
-        n.id,
-      ]);
       if (
         (
           await db.query(
@@ -235,12 +293,15 @@ export const registryMethods = {
         )
       ).rows[0];
       if (!target) fail(404, "房间授权不存在。");
+      await this.ownedNode(db, userId, d.node_id);
+      const n = await this.lockNodeRooms(db, d.node_id);
       await this.room(db, target.room_id, userId, { write: true });
-      const n = await this.ownedNode(db, userId, d.node_id);
-      await db.query("select id from agent_nodes where id=$1 for update", [
-        n.id,
-      ]);
-      if (n.revoked_at || !n.platform_scope) fail(403, "设备不能切换房间。");
+      if (
+        n.revoked_at ||
+        !n.platform_scope ||
+        new Date(n.expires_at) <= new Date()
+      )
+        fail(403, "设备不能切换房间。");
       if (
         (
           await db.query(
@@ -276,22 +337,13 @@ export const registryMethods = {
     });
   },
   async revokeDevice(db, nodeId, reason) {
+    const n = await this.lockNodeRooms(db, nodeId);
     const targets = (
       await db.query(
         "select s.participant_id,p.room_id from agent_seats s join participants p on p.id=s.participant_id where s.node_id=$1 order by p.room_id",
         [nodeId],
       )
     ).rows;
-    for (const t of targets)
-      await db.query("select id from rooms where id=$1 for update", [
-        t.room_id,
-      ]);
-    const n = (
-      await db.query("select * from agent_nodes where id=$1 for update", [
-        nodeId,
-      ])
-    ).rows[0];
-    if (!n) fail(404, "设备不存在。");
     if (n.revoked_at) return { ok: true, already_revoked: true };
     await db.query(
       "update agent_nodes set revoked_at=now(),session_id=null,last_seen_at=null,ready_until=null where id=$1",
@@ -334,7 +386,7 @@ export const registryMethods = {
       .object({ id: id, action: z.enum(["revoke", "delete", "regenerate"]) })
       .strict()
       .parse(input);
-    let roomId, development;
+    let development;
     await this.transaction(async (db) => {
       await this.owner(db, userId);
       const p = (
@@ -346,7 +398,6 @@ export const registryMethods = {
       if (!p) fail(404, "邀请不存在。");
       if (d.action !== "delete" && p.used_at)
         fail(409, "此邀请已使用；如需断开请撤销设备。");
-      roomId = p.room_id;
       development = p.development;
       await db.query(
         `update agent_pairings set revoked_at=coalesce(revoked_at,now()),code_cipher=null,doc_cipher=null${d.action === "delete" ? ",deleted_at=now()" : ""} where id=$1`,
@@ -354,7 +405,7 @@ export const registryMethods = {
       );
     });
     if (d.action === "regenerate")
-      return this.createPairing(userId, roomId, { development });
+      return this.createPairing(userId, undefined, { development });
     return { ok: true };
   },
   async proposeArtifact(token, turnId, lease, input, sessionId) {

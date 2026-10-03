@@ -349,6 +349,7 @@ it("Node 在源码初始化中断后恢复相同文件和 Git 分支，不覆盖
   node.request = async () => ({ arrayBuffer: async () => bytes });
   const job = {
     id: randomUUID(),
+    room_id: randomUUID(),
     kind: "develop",
     brief: {
       base_file_id: randomUUID(),
@@ -371,7 +372,7 @@ it("Node 在源码初始化中断后恢复相同文件和 Git 分支，不覆盖
     conflict = resolve(cwd, ".island-work", second.id);
   await mkdir(conflict);
   await writeFile(resolve(conflict, "one.txt"), "local content");
-  await expect(node.workspace(second)).rejects.toThrow("不同内容");
+  await expect(node.workspace(second)).rejects.toThrow(/已有文件.*保留/);
   expect(await readFile(resolve(conflict, "one.txt"), "utf8")).toBe(
     "local content",
   );

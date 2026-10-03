@@ -18,6 +18,11 @@ import { once } from "node:events";
 import WebSocket from "ws";
 import { createHash } from "node:crypto";
 import { createInterface } from "node:readline";
+// @ts-ignore Local managed client controller.
+import {
+  controlRequest,
+  runtimeStatus,
+} from "../packages/node/src/runtime.mjs";
 // @ts-ignore Executable ES modules used by the real server and client.
 import { attachGateway } from "../packages/agents/gateway.mjs";
 // @ts-ignore
@@ -277,7 +282,7 @@ describe.sequential(
       );
       expect(files.get("connect.sh")!.toString()).toContain('bootstrap "$@"');
       expect(files.get("scripts/node-bootstrap.ps1")!.toString()).toContain(
-        "bootstrap @nodeArguments",
+        "+ @('bootstrap')",
       );
       expect(files.has("connect.cmd")).toBe(true);
       expect(files.has("connect.sh")).toBe(true);
@@ -835,7 +840,15 @@ describe.sequential(
       }, "独立设备源码回传");
       expect(state.artifacts.length).toBe(2);
       for (let i = 0; i < 2; i++) {
-        const work = resolve(root, "device-" + i, "workspace", ".island-work");
+        const work = resolve(
+          root,
+          "device-" + i,
+          "workspace",
+          ".island-work",
+          "rooms",
+          room,
+          "tasks",
+        );
         const dirs = await readdir(work);
         const turn = state.turns.find(
           (turn: any) =>
@@ -1105,7 +1118,7 @@ it("WorkBuddy/Hermes 宿主经真实 MCP+WSS 各自处理点名，撤销只停�
           method: "notifications/initialized",
         }) + "\n",
       );
-      peers.push({ identity, child, tool, call, packets, lines });
+      peers.push({ identity, child, tool, call, packets, lines, file });
       await waitFor(
         async () => (await tool("island_status")).connected,
         name + " 专用宿主在线",
@@ -1239,6 +1252,8 @@ it("WorkBuddy/Hermes 宿主经真实 MCP+WSS 各自处理点名，撤销只停�
     for (const peer of peers) {
       peer.child.stdin.end();
       peer.lines.close();
+      if (await runtimeStatus(peer.file))
+        await controlRequest(peer.file, "stop");
     }
     await pool.query("delete from admin_audit_logs where admin_id=$1", [admin]);
     await pool.query("delete from auth.users where id=$1", [admin]);

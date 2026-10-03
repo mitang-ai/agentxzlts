@@ -63,8 +63,12 @@ test("人类在联机席位审批两个真实 Node、选主持、确认文档、
     );
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     for (let i = 0; i < 2; i++) {
-      const development = panel.getByLabel(
-        "允许此 Agent 在本机专用工作目录内开发（仍需批准聊天室任务）",
+      await page
+        .getByRole("button", { name: "我的 Agent", exact: true })
+        .click();
+      const center = page.locator(".agent-center");
+      const development = center.getByLabel(
+        "允许本地客户端在专用目录开发（不等于授权发送私有文件）",
       );
       if (!i) await expect(development).not.toBeChecked();
       // Both fixture Agents later receive development tasks, so the owner grants both.
@@ -76,18 +80,15 @@ test("人类在联机席位审批两个真实 Node、选主持、确认文档、
             response.request().method() === "POST",
         ),
         page
-          .getByRole("button", { name: "复制一键连接提示词", exact: true })
+          .getByRole("button", { name: "复制新 Agent 连接提示词", exact: true })
           .click(),
       ]);
-      await expect(panel.locator(".connection-pair-code code")).toHaveText(
-        (await pairResponse.json()).code,
-      );
-      const code = (await panel
-        .locator(".connection-pair-code code")
-        .textContent())!;
-      const prompt = await panel
-        .getByLabel("一键连接提示词", { exact: true })
-        .inputValue();
+      const invitation = await pairResponse.json(),
+        code = invitation.code;
+      await expect
+        .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+        .toContain(invitation.id);
+      const prompt = await page.evaluate(() => navigator.clipboard.readText());
       expect(prompt.length).toBeLessThan(220);
       const documentURL = prompt.match(/https?:\/\/\S+/)![0];
       const document = await context.request.get(documentURL);
@@ -126,6 +127,11 @@ test("人类在联机席位审批两个真实 Node、选主持、确认文档、
         },
       );
       expect(attached.status()).toBe(200);
+      await page
+        .locator(".room-list")
+        .getByRole("button", { name: /远程开发协作/ })
+        .click();
+      await page.getByRole("button", { name: "联机席位", exact: true }).click();
       await page.getByRole("button", { name: "刷新联机席位" }).click();
       await expect(
         page.getByRole("button", { name: "批准 " + name, exact: true }),

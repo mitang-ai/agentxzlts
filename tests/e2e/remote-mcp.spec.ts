@@ -63,46 +63,63 @@ test("浏览器生成专属远程配置，跨用户查看席位，真实 MCP HTT
     await page.getByRole("button", { name: /通用连接浏览器验收/ }).click();
     await page.getByRole("button", { name: "联机席位", exact: true }).click();
     const panel = page.getByRole("region", { name: "联机席位" });
-    await panel
-      .getByText("WorkBuddy、豆包等：无需安装客户端连接讨论", { exact: true })
+    await expect(
+      panel.getByRole("button", { name: "生成专属远程连接", exact: true }),
+    ).toHaveCount(0);
+    await page.getByRole("button", { name: "我的 Agent", exact: true }).click();
+    const center = page.locator(".agent-center");
+    await center
+      .getByText("手动 MCP 工具连接（不会自动回应 @）", { exact: true })
       .click();
-    await panel
+    await center
       .getByLabel("远程 Agent 昵称", { exact: true })
       .fill("米汤的 WorkBuddy");
     const response = page.waitForResponse(
       (r) =>
-        r.url().endsWith("/agents/remote-connection") &&
+        r.url().endsWith("/my-agents/remote-connection") &&
         r.request().method() === "POST",
     );
-    await panel
+    await center
       .getByRole("button", { name: "生成专属远程连接", exact: true })
       .click();
     const node = await (await response).json();
     const config = JSON.parse(
-      await panel.getByLabel("专属远程连接配置", { exact: true }).inputValue(),
+      await center.getByLabel("专属远程连接配置", { exact: true }).inputValue(),
     );
     const [key, entry] = Object.entries(config.mcpServers)[0] as [string, any];
     expect(entry.url).toBe(origin + "/mcp");
     expect(entry.type).toBe("streamableHttp");
     expect(entry.headers.Authorization).toBe("Bearer " + node.token);
     expect(key).toContain(node.node_id.replaceAll("-", ""));
-    expect(await panel.getByLabel("远程接入提示词").inputValue()).not.toContain(
-      node.token,
-    );
-    await panel
+    expect(
+      await center.getByLabel("远程接入提示词").inputValue(),
+    ).not.toContain(node.token);
+    await center
       .getByRole("button", { name: "隐藏私密配置", exact: true })
       .click();
     await expect(
-      panel.getByLabel("专属远程连接配置", { exact: true }),
+      center.getByLabel("专属远程连接配置", { exact: true }),
     ).toHaveCount(0);
+    await post(context, "/api/my-agents/add-to-room", {
+      node_id: node.node_id,
+      room_id: room,
+    });
+    await page
+      .locator(".room-list")
+      .getByRole("button", { name: /通用连接浏览器验收/ })
+      .click();
+    await page.getByRole("button", { name: "联机席位", exact: true }).click();
     await panel
       .getByRole("button", { name: "批准 米汤的 WorkBuddy", exact: true })
       .click();
-    const other = await post(
-      guest,
-      `/api/rooms/${room}/agents/remote-connection`,
-      { host_name: "豆包工作", agent_name: "小林的豆包" },
-    );
+    const other = await post(guest, "/api/my-agents/remote-connection", {
+      host_name: "豆包工作",
+      agent_name: "小林的豆包",
+    });
+    await post(guest, "/api/my-agents/add-to-room", {
+      node_id: other.node_id,
+      room_id: room,
+    });
     await panel.getByRole("button", { name: "刷新联机席位" }).click();
     await panel
       .getByRole("button", { name: "批准 小林的豆包", exact: true })
@@ -122,7 +139,7 @@ test("浏览器生成专属远程配置，跨用户查看席位，真实 MCP HTT
       name: "米汤的 WorkBuddy 的联机席位",
     });
     await expect(seat).toContainText("所属：米汤");
-    await expect(seat).toContainText("客户端已连接，模型待唤醒");
+    await expect(seat).toContainText("连接保持中 · 未监听任务");
     const visitor = await guest.newPage();
     await visitor.goto("/");
     await visitor.getByRole("button", { name: /通用连接浏览器验收/ }).click();
@@ -137,8 +154,8 @@ test("浏览器生成专属远程配置，跨用户查看席位，真实 MCP HTT
     ).toContainText("所属：小林");
     await expect(
       visitor.getByRole("article", { name: "小林的豆包 的联机席位" }),
-    ).toContainText("需要用户唤醒");
-    const code = await post(guest, `/api/rooms/${room}/agents/pairing`, {});
+    ).toContainText("设备离线");
+    const code = await post(guest, "/api/my-agents/pairing", {});
     expect(
       (
         await guest.request.post("/api/agent-node/client", {
@@ -149,7 +166,12 @@ test("浏览器生成专属远程配置，跨用户查看席位，真实 MCP HTT
     await panel.getByRole("button", { name: "刷新联机席位" }).click();
     await expect(
       panel.getByRole("region", { name: "房间成员的连接进度" }),
-    ).toContainText("小林 · 已开始准备客户端");
+    ).toHaveCount(0);
+    const obsolete = await context.request.post(
+      "/api/rooms/" + room + "/agents/pairing",
+      { headers: { origin, "x-island-request": "1" }, data: {} },
+    );
+    expect(obsolete.status()).toBe(409);
     // 有界等待期间模型才标记就绪；用真实网页 @ 完成输入到授权的链路。
     const waiting = tool("island_wait_task", {
       connection_id: conn.connection_id,
@@ -205,11 +227,32 @@ test("浏览器生成专属远程配置，跨用户查看席位，真实 MCP HTT
     page.on("dialog", (d) => d.accept());
     await panel
       .getByRole("button", {
-        name: "撤销 米汤的 WorkBuddy 的设备",
+        name: "撤销 米汤的 WorkBuddy 的房间授权",
         exact: true,
       })
       .click();
     await expect(seat).toContainText("已撤销");
+    expect(
+      (
+        await pool.query("select revoked_at from agent_nodes where id=$1", [
+          node.node_id,
+        ])
+      ).rows[0].revoked_at,
+    ).toBeNull();
+    await panel
+      .getByRole("button", { name: "我的 Agent · 统一连接与审批", exact: true })
+      .click();
+    // 全局身份的房间撤销不等于全设备撤销；由所有者在账号中心明确执行。
+    const registeredDevice = page
+      .locator(".agent-device")
+      .filter({ hasText: "米汤的 WorkBuddy" })
+      .filter({
+        has: page.getByRole("button", { name: "撤销整台设备", exact: true }),
+      });
+    await registeredDevice
+      .getByRole("button", { name: "撤销整台设备", exact: true })
+      .click();
+    await expect(registeredDevice).toHaveCount(0);
     expect(
       (
         await context.request.post("/mcp", {

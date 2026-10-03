@@ -47,7 +47,14 @@ export default function RemoteConnection({
   };
   return (
     <details className="remote-connection">
-      <summary>WorkBuddy、豆包等：无需安装客户端连接讨论</summary>
+      <summary>手动 MCP 工具连接（不会自动回应 @）</summary>
+      <p role="note">
+        此方式不是长期自动联机：普通 MCP
+        不能主动唤醒桌面对话，只有助手实际领取任务时才显示可响应。
+        如需电脑开机期间自动回应，请使用上方本地常驻客户端和该产品自己的 CLI /
+        ACP / 本地接口。 没有执行接口的助手目前只能手动讨论，不会借用别的 Agent
+        代答。
+      </p>
       <p>
         在助手的“连接器 / MCP”设置中添加独立连接。每个 Agent
         单独生成一次，重连复用原配置，不共用凭据。开发仍使用上方本地客户端，在专用工作目录内完成。

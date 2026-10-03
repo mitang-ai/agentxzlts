@@ -4,15 +4,7 @@ import {
   artifactFindings,
   privateFile,
 } from "../../agents/privacy.mjs";
-import {
-  mkdir,
-  writeFile,
-  readFile,
-  readdir,
-  lstat,
-  unlink,
-  realpath,
-} from "node:fs/promises";
+import { writeFile, readFile, readdir, lstat, unlink } from "node:fs/promises";
 import { resolve, relative, dirname, basename } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
@@ -30,6 +22,11 @@ import {
 import { createAdapter, runProcess } from "./adapters.mjs";
 import { readJSON, writeJSON, serverURL } from "./io.mjs";
 import { acquireInstance } from "./instances.mjs";
+import {
+  taskWorkspace,
+  checkTaskIdentity,
+  materializeFile,
+} from "./workspace.mjs";
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const ignored = (path) =>
   privateFile(path) ||
@@ -149,6 +146,16 @@ export class IslandNode {
       activity: this.active?.job?.kind || "idle",
       updated_at: new Date().toISOString(),
     };
+    if (
+      Object.hasOwn(data, "room_id") &&
+      before.room_id !== undefined &&
+      before.room_id !== data.room_id
+    ) {
+      this.controller?.abort();
+      this.active = null;
+      await unlink(this.spool).catch(() => {});
+      await this.onRoomChanged?.(before.room_id, data.room_id);
+    }
     if (
       data.connected &&
       (before.connected !== true ||
@@ -272,11 +279,23 @@ export class IslandNode {
             this.cursor = Number(this.cursors[packet.data.room_id] || 0);
             this.savedCursor = -1;
           }
-          void this.updateStatus({ ...packet.data, connected: true }).catch(
-            () => this.log("本机连接状态暂时无法保存。"),
-          );
-          poll = setInterval(() => void this.tick(), 2000);
-          void this.tick();
+          // 切房间先取消旧任务/宿主交付并保存状态，再开始新房间轮询。
+          // 否则异步清理可能晚于新 claim，误取消新任务或混用旧消费者。
+          void this.updateStatus({ ...packet.data, connected: true })
+            .then(() => {
+              if (
+                this.stopped ||
+                this.ws !== ws ||
+                ws.readyState !== WebSocket.OPEN
+              )
+                return;
+              poll = setInterval(() => void this.tick(), 2000);
+              void this.tick();
+            })
+            .catch(() => {
+              this.log("本机连接状态暂时无法保存，本轮不领取任务。");
+              ws.close();
+            });
         } else if (packet.type === "sync") {
           void this.updateStatus({
             state: packet.data.state,
@@ -307,7 +326,6 @@ export class IslandNode {
       ws.on("unexpected-response", (request, response) => {
         if (response.statusCode === 409) {
           if (
-            this.hasConnected &&
             !this.leaseConflictRetried &&
             response.headers["retry-after"] === "46"
           ) {
@@ -356,8 +374,11 @@ export class IslandNode {
     try {
       const state = await this.rpc("sync", {
         accepting:
-          Boolean(this.active) ||
-          (this.adapter.accepting ? this.adapter.accepting() : true),
+          Boolean(
+            this.active &&
+            (!this.adapter.processing ||
+              this.adapter.processing(this.active.job.id)),
+          ) || (this.adapter.accepting ? this.adapter.accepting() : true),
         cursor: this.cursor,
         active: this.active
           ? { id: this.active.job.id, lease: this.active.job.lease }
@@ -441,12 +462,21 @@ export class IslandNode {
     }
   }
   async workspace(job) {
-    const root = resolve(this.config.workspace),
-      directory = resolve(root, ".island-work", job.id);
-    await mkdir(directory, { recursive: true, mode: 0o700 });
-    const canonical = await realpath(directory);
-    if (!canonical.startsWith((await realpath(root)) + requireSlash()))
-      throw Error("本地工作目录不是授权目录的子目录。");
+    checkTaskIdentity(job);
+    const root = resolve(this.config.workspace);
+    const stamp = resolve(this.privateDir, job.id + "-workspace.json"),
+      previous = await readJSON(stamp);
+    // 已启动的旧任务保留原目录，不能把旧基线 stamp 套到空的新目录导致整树误删。
+    let legacy = Boolean(previous && previous.layout !== "room-task-v1");
+    if (!previous) {
+      try {
+        await lstat(resolve(root, ".island-work", job.id));
+        legacy = true;
+      } catch (e) {
+        if (e.code !== "ENOENT") throw e;
+      }
+    } else if (legacy) await lstat(resolve(root, ".island-work", job.id));
+    const directory = await taskWorkspace(root, job, { legacy });
     const base = new Map(),
       documents = [];
     if (job.kind === "develop") {
@@ -463,27 +493,13 @@ export class IslandNode {
         base.set(path, content);
       if (treeHash(base) !== job.brief.base_hash)
         throw Error("本地接收的基线摘要与需求不一致。");
-      const stamp = resolve(this.privateDir, job.id + "-workspace.json");
-      const previous = await readJSON(stamp);
       if (!previous) {
         for (const [path, content] of base) {
           if (ignored(path))
             throw Error(
               "代码基线包含凭据、依赖或 Node 内部路径，请提供纯源码基线。",
             );
-          const full = resolve(directory, safePath(path));
-          await mkdir(dirname(full), { recursive: true });
-          try {
-            await writeFile(full, content, { flag: "wx" });
-          } catch (e) {
-            if (
-              e.code !== "EEXIST" ||
-              digest(await readFile(full)) !== digest(content)
-            )
-              throw Error(
-                "中断初始化留下了不同内容，请检查并保留本机工作目录后重试。",
-              );
-          }
+          await materializeFile(directory, path, content);
         }
         await runProcess("git", ["init"], { cwd: directory });
         await runProcess("git", ["add", "."], { cwd: directory });
@@ -507,6 +523,7 @@ export class IslandNode {
         await writeJSON(stamp, {
           brief_hash: job.brief.content_hash,
           base_hash: job.brief.base_hash,
+          layout: legacy ? "legacy-task-v0" : "room-task-v1",
         });
       } else if (
         previous.brief_hash !== job.brief.content_hash ||
@@ -521,7 +538,7 @@ export class IslandNode {
       const response = await this.request("/api/agent-node/files/" + fid),
         bytes = Buffer.from(await response.arrayBuffer()),
         doc = resolve(directory, ".island-output-document-" + fid + extension);
-      await writeFile(doc, bytes);
+      await materializeFile(directory, basename(doc), bytes);
       documents.push(doc);
     }
     return { directory, base, documents };
@@ -700,7 +717,4 @@ export class IslandNode {
     this.ws?.close(1000, "Node 已停止");
     void this.adapter.disconnect();
   }
-}
-function requireSlash() {
-  return process.platform === "win32" ? "\\" : "/";
 }

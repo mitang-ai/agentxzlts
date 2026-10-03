@@ -392,6 +392,13 @@ export default function MyAgents({
           发给 Agent 的只有一句话，专属说明包含安装步骤。每个 Agent
           使用独立邀请，不会转交其它 CLI。
         </p>
+        <p>
+          自动回应 @ 需要本机常驻客户端和该产品自己的 CLI / ACP / 本地执行接口。
+          Codex、Claude Code、OpenCode 可用自己的 CLI。WorkBuddy
+          可明确选用自带独立 ACP 引擎。 只有普通 MCP
+          的桌面助手只能手动领取任务，不能自动唤醒已有对话。配对失败不会自动降级到
+          MCP。
+        </p>
         <label>
           <input
             type="checkbox"
@@ -439,10 +446,54 @@ export default function MyAgents({
         </p>
       </section>
       <section className="agent-card" aria-label="我的待审核发送">
-        <h2>待我确认（{data?.reviews?.length || 0}）</h2>
+        <h2>待我确认 · 私有发送（{data?.reviews?.length || 0}）</h2>
         {!data?.reviews?.length && <p>暂无待审核发送</p>}
         {data?.reviews?.map((r: Row) => (
           <Review key={r.id} review={r} refresh={refresh} />
+        ))}
+      </section>
+      <section className="agent-card" aria-label="我的房间入席审批">
+        <h2>待我确认 · 房间入席（{data?.approvals?.length || 0}）</h2>
+        <p>
+          你主持的所有房间汇总在这里。入席批准不授权开发，也不替代设备所有者的私有发送审核。
+        </p>
+        {!data?.approvals?.length && <p>暂无待批准的入席申请</p>}
+        {data?.approvals?.map((s: Row) => (
+          <article className="agent-device" key={s.participant_id}>
+            <strong>{s.display_name}</strong>
+            <p>
+              {s.room_name} · 所属：{s.owner_name} · {s.adapter}
+            </p>
+            {s.room_status !== "active" && (
+              <small>房间已冻结，恢复后才能批准入席。</small>
+            )}
+            <div className="agent-actions">
+              {(["approve", "reject"] as const).map((decision) => (
+                <button
+                  key={decision}
+                  className="secondary compact"
+                  disabled={busy || s.room_status !== "active"}
+                  aria-label={`${decision === "approve" ? "批准" : "拒绝"} ${s.display_name} 加入 ${s.room_name}`}
+                  onClick={async () => {
+                    setBusy(true);
+                    setError("");
+                    try {
+                      await api(`rooms/${s.room_id}/agents/${decision}`, {
+                        participant_id: s.participant_id,
+                      });
+                      await refresh();
+                    } catch (e) {
+                      setError((e as Error).message);
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                >
+                  {decision === "approve" ? "批准入席" : "拒绝入席"}
+                </button>
+              ))}
+            </div>
+          </article>
         ))}
       </section>
       <section className="agent-card">
@@ -457,7 +508,9 @@ export default function MyAgents({
                 {n.revoked_at
                   ? "已撤销"
                   : n.connected
-                    ? "设备已连接"
+                    ? n.model_ready
+                      ? "客户端正在监听 / 执行"
+                      : "连接保持中 · 未监听任务"
                     : "设备未连接"}
               </span>
               {!n.revoked_at && (
@@ -537,7 +590,7 @@ export default function MyAgents({
                             onClick={() => {
                               if (
                                 confirm(
-                                  "切换会断开旧房间连接。GUI Agent 请先新建一个不含原房间记忆的对话，再重新打开连接。确认已准备独立会话？",
+                                  "切换会断开旧房间连接。GUI Agent 必须重启专属 MCP 服务并新建不含原房间记忆的对话；旧对话不能领取新房间任务。确认已准备独立会话？",
                                 )
                               )
                                 void action("select-room", {

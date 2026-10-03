@@ -189,6 +189,7 @@ describe.sequential("通用远程 MCP 的真实 HTTP 协议、身份与最终业
       fingerprint: randomUUID(),
       capabilities: { egress_v2: true },
     });
+    const logs: string[] = [];
     const node = new IslandNode(
       {
         server: origin,
@@ -199,14 +200,14 @@ describe.sequential("通用远程 MCP 的真实 HTTP 协议、身份与最终业
       },
       {
         configFile: resolve(root, randomUUID(), "config.json"),
-        logger: () => {},
+        logger: (text: string) => logs.push(text),
       },
     );
     const running = node.start();
     async function until(check: () => boolean) {
       for (let i = 0; i < 500 && !check(); i++)
         await new Promise((r) => setTimeout(r, 20));
-      expect(check()).toBe(true);
+      expect(check(), logs.join("\n")).toBe(true);
     }
     try {
       await until(
@@ -215,6 +216,15 @@ describe.sequential("通用远程 MCP 的真实 HTTP 协议、身份与最终业
           node.connectionStatus.connected,
       );
       const a = await service.addAgentToRoom(users[0], room, identity.node_id);
+      // 主动 sync 的失效会话错误也必须携带重连原因，不能等周期维护偶然先发现。
+      // 否则客户端把切房间当成撤销凭据，永久停止这个有效设备。
+      const replaced = await node
+        .rpc("sync", { cursor: 0, accepting: true })
+        .catch((error: any) => error);
+      expect(replaced).toMatchObject({
+        status: 401,
+        code: "CONNECTION_REPLACED",
+      });
       await service.seatAction(users[0], room, "approve", {
         participant_id: a.participant_id,
       });

@@ -1,11 +1,11 @@
 import { childEnvironment } from "../../agents/privacy.mjs";
-import { spawn, spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { spawn } from "node:child_process";
 import { readFile, writeFile, mkdir, lstat } from "node:fs/promises";
-import { resolve, relative, isAbsolute, dirname } from "node:path";
+import { resolve, relative, isAbsolute } from "node:path";
 import { randomUUID } from "node:crypto";
 import { turnResultSchema } from "../../agents/protocol.mjs";
 import { HostAdapter } from "./host-adapter.mjs";
+import { windowsLaunch } from "./windows-command.mjs";
 import { inScope } from "../../agents/archive.mjs";
 export function parseResult(value) {
   if (typeof value === "object" && value) return turnResultSchema.parse(value);
@@ -20,6 +20,20 @@ export function parseResult(value) {
     );
   }
 }
+export function stopProcessTree(child) {
+  if (!child?.pid || child.exitCode !== null || child.signalCode !== null)
+    return;
+  try {
+    if (process.platform === "win32") {
+      const killer = spawn(
+        "taskkill.exe",
+        ["/pid", String(child.pid), "/T", "/F"],
+        { windowsHide: true, stdio: "ignore" },
+      );
+      killer.once("error", () => {});
+    } else process.kill(-child.pid, "SIGTERM");
+  } catch {}
+}
 export function runProcess(
   command,
   args,
@@ -32,42 +46,11 @@ export function runProcess(
     onLine,
   } = {},
 ) {
-  // Windows npm 的 .cmd 包装不能由无 shell 的 spawn 直接执行。只解析标准 npm shim 的真实入口。
-  if (process.platform === "win32") {
-    if (/\.(?:m?js|cjs)$/i.test(command)) {
-      args = [resolve(command), ...args];
-      command = process.execPath;
-    } else {
-      let executable = command;
-      if (!isAbsolute(executable)) {
-        const found = spawnSync("where.exe", [executable], {
-          encoding: "utf8",
-          windowsHide: true,
-        });
-        if (found.status === 0)
-          executable =
-            found.stdout
-              .split(/\r?\n/)
-              .find((path) => path.trim())
-              ?.trim() || executable;
-      }
-      if (/\.cmd$/i.test(executable) && existsSync(executable)) {
-        const shim = readFileSync(executable, "utf8");
-        const match = shim.match(
-          /"%[~]?dp0%?\\([^"\r\n]+\.(?:m?js|cjs|exe))"/i,
-        );
-        const entry = match && resolve(dirname(executable), match[1]);
-        if (!entry || !existsSync(entry))
-          throw Error(
-            "无法识别此 Windows 包装命令，请在 Node 配置 command 填写真实 .exe 或 JavaScript 入口。",
-          );
-        if (/\.exe$/i.test(entry)) command = entry;
-        else {
-          args = [entry, ...args];
-          command = process.execPath;
-        }
-      } else command = executable;
-    }
+  if (process.platform === "win32")
+    ({ command, args } = windowsLaunch(command, args));
+  else if (/\.(m?js|cjs)$/i.test(command)) {
+    args = [resolve(command), ...args];
+    command = process.execPath;
   }
   return new Promise((resolvePromise, reject) => {
     const child = spawn(command, args, {
@@ -80,21 +63,13 @@ export function runProcess(
     let stdout = "",
       stderr = "",
       finished = false;
-    const kill = () => {
-      try {
-        if (process.platform === "win32")
-          spawn("taskkill.exe", ["/pid", String(child.pid), "/T", "/F"], {
-            windowsHide: true,
-            stdio: "ignore",
-          });
-        else process.kill(-child.pid, "SIGTERM");
-      } catch {}
-    };
+    const kill = () => stopProcessTree(child);
     const stop = () => {
       kill();
       setTimeout(() => {
         try {
-          if (process.platform !== "win32") process.kill(-child.pid, "SIGKILL");
+          if (!finished && process.platform !== "win32")
+            process.kill(-child.pid, "SIGKILL");
         } catch {}
       }, 3000).unref();
     };
@@ -158,6 +133,12 @@ export class CLIAdapter {
   async discover() {
     const command = this.config.command || this.config.adapter;
     await runProcess(command, ["--version"], { timeout: 10000 });
+    if (this.config.adapter === "codex") {
+      const { stdout } = await runProcess(command, ["exec", "--help"], {
+        timeout: 10000,
+      });
+      this.ephemeral = stdout.includes("--ephemeral");
+    }
     return [{ id: this.config.adapter, name: this.config.agent_name }];
   }
   async dispatch(job, { cwd, signal, documentPaths = [] }) {
@@ -221,7 +202,11 @@ export class CLIAdapter {
           job.kind === "develop" ? "workspace-write" : "read-only",
           "--cd",
           cwd,
-          ...(this.sessionId ? ["resume", this.sessionId] : []),
+          ...(this.ephemeral
+            ? ["--ephemeral"]
+            : this.sessionId
+              ? ["resume", this.sessionId]
+              : []),
           "--json",
           "--skip-git-repo-check",
           "--output-schema",
@@ -248,7 +233,10 @@ export class CLIAdapter {
           }
         })
         .find((e) => e?.type === "thread.started");
-      return { ...result, local_session_id: thread?.thread_id };
+      return {
+        ...result,
+        local_session_id: this.ephemeral ? undefined : thread?.thread_id,
+      };
     }
     if (type === "claude") {
       const { stdout } = await runProcess(
@@ -520,11 +508,16 @@ export class ACPAdapter {
   }
   async discover() {
     return new Promise((yes, no) => {
-      const child = spawn(this.config.command, this.config.args || [], {
+      const launch =
+        process.platform === "win32"
+          ? windowsLaunch(this.config.command, this.config.args || [])
+          : { command: this.config.command, args: this.config.args || [] };
+      const child = spawn(launch.command, launch.args, {
         cwd: this.config.workspace,
         env: childEnvironment(),
         stdio: ["pipe", "pipe", "ignore"],
         windowsHide: true,
+        detached: process.platform !== "win32",
       });
       let buffer = "",
         settled = false;
@@ -532,7 +525,7 @@ export class ACPAdapter {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
-        child.kill("SIGTERM");
+        stopProcessTree(child);
         error ? no(error) : yes(result);
       };
       const timer = setTimeout(
@@ -583,11 +576,16 @@ export class ACPAdapter {
     this.sessionId = id;
   }
   async dispatch(job, { cwd, signal, documentPaths = [] }) {
-    const child = spawn(this.config.command, this.config.args || [], {
+    const launch =
+      process.platform === "win32"
+        ? windowsLaunch(this.config.command, this.config.args || [])
+        : { command: this.config.command, args: this.config.args || [] };
+    const child = spawn(launch.command, launch.args, {
       cwd,
       env: childEnvironment(),
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
+      detached: process.platform !== "win32",
     });
     const pending = new Map();
     let next = 1,
@@ -753,7 +751,7 @@ export class ACPAdapter {
           method: "session/cancel",
           params: { sessionId: this.sessionId },
         });
-      child.kill("SIGTERM");
+      stopProcessTree(child);
     };
     signal?.addEventListener("abort", stop, { once: true });
     try {
@@ -784,7 +782,7 @@ export class ACPAdapter {
       return { ...parseResult(text), local_session_id: this.sessionId };
     } finally {
       signal?.removeEventListener("abort", stop);
-      child.kill("SIGTERM");
+      stopProcessTree(child);
       rejectAll();
     }
   }

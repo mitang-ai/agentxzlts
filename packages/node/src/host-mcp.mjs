@@ -112,18 +112,23 @@ export async function serveHostMCP(
         try {
           const args = schema.parse(packet.params.arguments || {});
           let result;
-          if (name === "island_status")
+          if (name === "island_status") {
+            const status = node.getStatus
+              ? await node.getStatus()
+              : node.connectionStatus;
             result = {
               host: node.config.host_name || node.config.agent_name,
               adapter: "mcp",
-              participant_id: node.config.participant_id,
-              room_id: node.config.room_id,
-              connected: !!node.connectionStatus.connected,
-              state: node.connectionStatus.state,
-              muted: node.connectionStatus.muted,
+              participant_id: status.participant_id || null,
+              room_id: status.room_id || null,
+              connected: !!status.connected,
+              state: status.state,
+              muted: status.muted,
+              automatic_wake: false,
+              listening: status.listening === true,
               pending_task: node.adapter.pending?.job.id || null,
             };
-          else if (name === "island_wait_task") {
+          } else if (name === "island_wait_task") {
             if (node.stopped)
               throw Error("设备已停止或撤销，请检查专用配置并重新配对。");
             result = await node.adapter.waitTask(
@@ -137,7 +142,7 @@ export async function serveHostMCP(
               args.result,
             );
           else
-            result = node.adapter.fail(
+            result = await node.adapter.fail(
               args.task_id,
               args.delivery_id,
               args.error,

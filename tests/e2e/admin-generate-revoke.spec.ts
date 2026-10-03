@@ -38,7 +38,7 @@ test("站内撤销不依赖原生弹窗，一键生成用户可登录且不会�
         data: { name: "设备撤销验收", icon: "🏝️" },
       })
     ).id;
-    const code = await post(`/api/rooms/${room}/agents/pairing`, {});
+    const code = await post("/api/my-agents/pairing", {});
     const node = await post("/api/agent-node/pair", {
       code: code.code,
       node_name: "测试设备",
@@ -47,6 +47,11 @@ test("站内撤销不依赖原生弹窗，一键生成用户可登录且不会�
       fingerprint: randomUUID(),
       capabilities: { host_name: "WorkBuddy" },
     });
+    const attached = await post("/api/my-agents/add-to-room", {
+      node_id: node.node_id,
+      room_id: room,
+    });
+    node.participant_id = attached.participant_id;
     await post(`/api/rooms/${room}/agents/approve`, {
       participant_id: node.participant_id,
     });

@@ -162,7 +162,7 @@ describe.sequential("连接、记录清理与文件需求", () => {
       );
     }
   });
-  it("Agent 在线必须有已批准席位、有效会话与未过期心跳", async () => {
+  it("Agent 在线必须有已批准席位、有效心跳和实际任务监听，单纯连接不算在线", async () => {
     const node = await pair();
     const online = async () =>
       (await participantPresence(pool, [{ id: node.participant_id }], room))[0]
@@ -176,6 +176,11 @@ describe.sequential("连接、记录清理与文件需求", () => {
       await service.seatAction(users[0], room, "approve", {
         participant_id: node.participant_id,
       });
+      expect(await online()).toBe(false);
+      await pool.query(
+        "update agent_nodes set ready_until=now()+interval '35 seconds' where id=$1",
+        [node.node_id],
+      );
       expect(await online()).toBe(true);
       await pool.query(
         "update agent_nodes set last_seen_at=now()-interval '46 seconds' where id=$1",
@@ -492,6 +497,7 @@ describe.sequential("连接、记录清理与文件需求", () => {
     const ids = [randomUUID(), randomUUID()];
     const result = await node.workspace({
       id: randomUUID(),
+      room_id: room,
       kind: "align",
       brief: {
         file_ids: ids,

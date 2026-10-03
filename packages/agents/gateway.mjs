@@ -352,6 +352,7 @@ export function attachGateway(server, pool, storage, env = process.env) {
                   "error",
                   {
                     status: e.status || (e instanceof z.ZodError ? 400 : 503),
+                    code: e.code,
                     error:
                       e instanceof z.ZodError
                         ? "Node 消息格式无效。"

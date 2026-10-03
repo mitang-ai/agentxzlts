@@ -488,10 +488,11 @@ async function handle(
         const input = await jsonBody(req);
         const action = path[3];
         let result;
-        if (action === "pairing")
-          result = await agents.createPairing(user.id, roomId, input);
-        else if (action === "remote-connection")
-          result = await agents.createRemoteConnection(user.id, roomId, input);
+        if (["pairing", "remote-connection"].includes(action))
+          throw new AppError(
+            409,
+            "请在“我的 Agent”统一连接，再添加到房间；房间只管理入席审批。",
+          );
         else if (action === "delete-pairings")
           result = await agents.deletePairings(user.id, input);
         else if (action === "revoke-pairing")
@@ -860,6 +861,11 @@ async function handle(
       return NextResponse.json(
         { error: messages[code] },
         { status: code === "RATE_LIMITED" ? 429 : 403 },
+      );
+    if (err.code === "40001")
+      return NextResponse.json(
+        { error: "数据正在变化，请稍后重试当前操作" },
+        { status: 503 },
       );
     if (["22P02", "23502", "23503", "23514"].includes(err.code))
       return NextResponse.json(

@@ -102,7 +102,7 @@ test("多用户/多标签页在线、输入 @ 提及人与 Agent、邀请码单�
 
     await page.getByRole("button", { name: "联机席位", exact: true }).click();
     const panel = page.getByRole("region", { name: "联机席位" });
-    const paired = await post(context, `/api/rooms/${room}/agents/pairing`, {});
+    const paired = await post(context, "/api/my-agents/pairing", {});
     const agent = await post(context, "/api/agent-node/pair", {
       code: paired.code,
       node_name: "本地验收设备",
@@ -111,6 +111,11 @@ test("多用户/多标签页在线、输入 @ 提及人与 Agent、邀请码单�
       fingerprint: randomUUID(),
       capabilities: {},
     });
+    const attached = await post(context, "/api/my-agents/add-to-room", {
+      node_id: agent.node_id,
+      room_id: room,
+    });
+    agent.participant_id = attached.participant_id;
     await post(context, `/api/rooms/${room}/agents/approve`, {
       participant_id: agent.participant_id,
     });
