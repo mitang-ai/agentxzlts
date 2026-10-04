@@ -376,6 +376,34 @@ label select {
   margin-top: 17px;
   text-align: center;
 }
+.quick-account-action {
+  border-top: 1px solid var(--line);
+  margin-top: 20px;
+  padding-top: 18px;
+}
+.quick-account-action .auth-note {
+  color: var(--muted);
+  line-height: 1.7;
+}
+.quick-account-credentials {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+  min-width: 0;
+}
+.quick-account-credentials input {
+  width: 100%;
+  min-width: 0;
+  font-family: monospace;
+}
+.credential-warning {
+  color: #8a4b0f;
+  background: #fff6e6;
+  border: 1px solid #f1d3a6;
+  border-radius: 8px;
+  padding: 12px;
+  line-height: 1.7;
+}
 .auth-page footer {
   text-align: center;
   padding: 25px;
@@ -2285,4 +2313,22 @@ button[hidden] {
 }
 .mention-picker [aria-selected="true"] {
   background: #eef4ff;
+}
+
+.quick-account-modal {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.quick-account-modal > header,
+.quick-account-modal > .modal-footer,
+.quick-account-modal > #quick-account-description {
+  flex-shrink: 0;
+}
+.quick-account-scroll {
+  min-height: 0;
+  overflow-y: auto;
+}
+.quick-account-modal > .modal-footer {
+  margin-top: 14px;
 }

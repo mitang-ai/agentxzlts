@@ -17,7 +17,7 @@ test("连续复制自动换码、失效记录单删/清空、需求设计文件�
     await page.goto("/");
     await page.getByRole("button", { name: "注册", exact: true }).click();
     await page.getByLabel("昵称", { exact: true }).fill("体验验收管理者");
-    await page.getByLabel("邮箱", { exact: true }).fill(email);
+    await page.getByLabel("邮箱 / 登录账号", { exact: true }).fill(email);
     await page
       .getByLabel("密码", { exact: true })
       .fill("Island-UX-Browser-2026");

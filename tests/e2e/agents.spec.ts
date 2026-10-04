@@ -27,7 +27,7 @@ test("人类在联机席位审批两个真实 Node、选主持、确认文档、
     await page.goto("/");
     await page.getByRole("button", { name: "注册", exact: true }).click();
     await page.getByLabel("昵称", { exact: true }).fill("联机管理者");
-    await page.getByLabel("邮箱", { exact: true }).fill(email);
+    await page.getByLabel("邮箱 / 登录账号", { exact: true }).fill(email);
     await page
       .getByLabel("密码", { exact: true })
       .fill("Island-Agent-Browser-2026");

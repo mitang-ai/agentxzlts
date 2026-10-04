@@ -71,7 +71,7 @@ async function register(page: Page, name: string, email: string) {
   }
   await page.getByRole("button", { name: "注册", exact: true }).click();
   await page.getByLabel("昵称", { exact: true }).fill(name);
-  await page.getByLabel("邮箱", { exact: true }).fill(email);
+  await page.getByLabel("邮箱 / 登录账号", { exact: true }).fill(email);
   await page.getByLabel("密码", { exact: true }).fill("Island-Testing-2026");
   await page.getByRole("button", { name: "创建账号" }).click();
   await expect(page.getByRole("button", { name: "个人资料" })).toBeVisible();
@@ -474,7 +474,7 @@ test("移动端单页流程：注册、房间、聊天、任务、文件、返�
   await page.getByRole("button", { name: "个人资料" }).click();
   await page.getByRole("button", { name: "退出登录", exact: true }).click();
   await page
-    .getByLabel("邮箱", { exact: true })
+    .getByLabel("邮箱 / 登录账号", { exact: true })
     .fill(`mobile-${suffix}@example.com`);
   await page.getByLabel("密码", { exact: true }).fill("Island-Testing-2026");
   await page.getByRole("button", { name: "登录协作岛" }).click();

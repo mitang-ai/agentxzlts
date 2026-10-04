@@ -47,6 +47,12 @@ import ConnectionPanel from "./ConnectionPanel";
 import MyAgents from "./MyAgents";
 import AgentPreview from "./AgentPreview";
 import AvatarEditor, { type AvatarEditorHandle } from "./AvatarEditor";
+import QuickAccountCredentials from "./QuickAccountCredentials";
+import {
+  createQuickAccount,
+  registerQuickAccount,
+  type QuickAccount,
+} from "@/lib/quick-account";
 import {
   canManage,
   canUpdateTask,
@@ -128,17 +134,48 @@ function Brand() {
 }
 function Auth({
   onLogin,
+  onQuickLogin,
   notify,
 }: {
   onLogin: (u: User) => void;
+  onQuickLogin: (u: User, account: QuickAccount) => void;
   notify: (s: string) => void;
 }) {
   const site = useSite();
   const [register, setRegister] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const pendingAccount = useRef<QuickAccount | null>(null);
+  const submitting = useRef(false);
+  const [recoveryAccount, setRecoveryAccount] = useState<QuickAccount | null>(
+    null,
+  );
+  const registrationAllowed =
+    site.config.operations.registration && !site.config.operations.maintenance;
+  async function quickSignup() {
+    if (submitting.current || !registrationAllowed) return;
+    submitting.current = true;
+    setBusy(true);
+    setError("");
+    try {
+      const account = pendingAccount.current ?? createQuickAccount();
+      pendingAccount.current = account;
+      const { user } = await registerQuickAccount<{ user: User }>(account, api);
+      onQuickLogin(user, account);
+      window.dispatchEvent(new Event("island:session"));
+      notify("账号已创建并登录，请先保存账号和密码");
+    } catch (e) {
+      setRecoveryAccount(pendingAccount.current);
+      setError((e as Error).message);
+    } finally {
+      submitting.current = false;
+      setBusy(false);
+    }
+  }
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (submitting.current) return;
+    submitting.current = true;
     setBusy(true);
     setError("");
     const values = Object.fromEntries(new FormData(e.currentTarget));
@@ -153,6 +190,7 @@ function Auth({
     } catch (e) {
       setError((e as Error).message);
     } finally {
+      submitting.current = false;
       setBusy(false);
     }
   }
@@ -189,6 +227,7 @@ function Auth({
           <div className="auth-switch">
             <button
               className={!register ? "active" : ""}
+              disabled={busy}
               onClick={() => {
                 setRegister(false);
                 setError("");
@@ -198,6 +237,7 @@ function Auth({
             </button>
             <button
               disabled={
+                busy ||
                 !site.config.operations.registration ||
                 site.config.operations.maintenance
               }
@@ -224,7 +264,7 @@ function Auth({
               </label>
             )}
             <label>
-              邮箱
+              邮箱 / 登录账号
               <input
                 name="email"
                 type="email"
@@ -256,6 +296,36 @@ function Auth({
               <ArrowRight size={17} />
             </button>
           </form>
+          <div className="quick-account-action">
+            <button
+              className="secondary full"
+              type="button"
+              disabled={busy || !registrationAllowed}
+              onClick={quickSignup}
+            >
+              {busy
+                ? "正在处理…"
+                : recoveryAccount
+                  ? "重试创建 / 恢复登录"
+                  : "一键创建账号密码"}
+            </button>
+            <p className="auth-note">
+              自动创建并登录，无需填写。请妥善保管账号和密码；生成的登录账号不是可收邮件的邮箱。
+            </p>
+            {!registrationAllowed && (
+              <p className="muted small">
+                网站暂未开放注册，一键创建暂不可用。
+              </p>
+            )}
+            {recoveryAccount && (
+              <>
+                <p role="status" className="small">
+                  尚未确认创建成功。请先保存以下账密，再点击重试；重试使用同一账号，不重复创建。
+                </p>
+                <QuickAccountCredentials account={recoveryAccount} />
+              </>
+            )}
+          </div>
           <p className="auth-note">
             {register
               ? "无需邮箱验证码，注册后即可开始协作。"
@@ -281,6 +351,9 @@ function Auth({
 export default function Island() {
   const site = useSite();
   const [user, setUser] = useState<User | null>(null);
+  const [newCredentials, setNewCredentials] = useState<QuickAccount | null>(
+    null,
+  );
   const [initial, setInitial] = useState(true);
   const [toast, setToast] = useState("");
   const [rooms, setRooms] = useState<Room[]>([]);
@@ -796,7 +869,14 @@ export default function Island() {
   if (!user)
     return (
       <>
-        <Auth onLogin={setUser} notify={notify} />
+        <Auth
+          onLogin={setUser}
+          onQuickLogin={(u, account) => {
+            setNewCredentials(account);
+            setUser(u);
+          }}
+          notify={notify}
+        />
         {toastUI}
       </>
     );
@@ -2134,6 +2214,37 @@ export default function Island() {
           onClose={() => setConfirm(null)}
           notify={notify}
         />
+      )}
+      {newCredentials && (
+        <Dialog.Root open>
+          <Dialog.Portal>
+            <Dialog.Overlay className="overlay" />
+            <Dialog.Content
+              className="modal quick-account-modal"
+              aria-describedby="quick-account-description"
+              onEscapeKeyDown={(e) => e.preventDefault()}
+              onPointerDownOutside={(e) => e.preventDefault()}
+            >
+              <header>
+                <Dialog.Title>账号已创建并登录</Dialog.Title>
+              </header>
+              <Dialog.Description id="quick-account-description">
+                请先保存账密，再开始使用协作岛。
+              </Dialog.Description>
+              <div className="quick-account-scroll">
+                <QuickAccountCredentials account={newCredentials} />
+              </div>
+              <div className="modal-footer">
+                <button
+                  className="primary"
+                  onClick={() => setNewCredentials(null)}
+                >
+                  我已妥善保存，开始使用
+                </button>
+              </div>
+            </Dialog.Content>
+          </Dialog.Portal>
+        </Dialog.Root>
       )}
       {toastUI}
     </div>
