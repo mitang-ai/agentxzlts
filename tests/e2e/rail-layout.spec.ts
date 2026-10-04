@@ -93,6 +93,53 @@ test("导航在普通桌面高度无需滚动，短窗口固定底部，手机�
         .click();
     }
     await page.screenshot({ path: "test-results/rail-mobile-320.png" });
+    // The production site has notices above the app, unlike a fresh account
+    // fixture. Their height must be shared with the app, never added to 100dvh.
+    for (const noticeCount of [1, 2]) {
+      await page.evaluate((count) => {
+        document
+          .querySelectorAll("[data-rail-notice]")
+          .forEach((el) => el.remove());
+        const app = document.querySelector(".app")!;
+        for (let i = 0; i < count; i++) {
+          const notice = document.createElement("div");
+          notice.className = i === 0 ? "site-announcement" : "site-sync-error";
+          notice.dataset.railNotice = "fixture";
+          notice.textContent = "公告高度回归：欢迎来到协作岛，一起把想法做成。";
+          app.before(notice);
+        }
+      }, noticeCount);
+      for (const [width, height] of [
+        [1366, 900],
+        [1366, 768],
+        [1366, 640],
+        [1366, 300],
+        [390, 844],
+        [320, 568],
+      ]) {
+        await page.setViewportSize({ width, height });
+        expect(
+          await page.evaluate(
+            () => document.documentElement.scrollHeight <= innerHeight + 1,
+          ),
+        ).toBe(true);
+        for (const name of width >= 768 ? ["设置", "个人资料"] : ["个人资料"]) {
+          await expect(
+            rail.getByRole("button", { name, exact: true }),
+          ).toBeInViewport({ ratio: 1 });
+        }
+        if (width >= 768 && height >= 640) {
+          expect(
+            await nav.evaluate((el) => el.scrollHeight <= el.clientHeight + 1),
+          ).toBe(true);
+        }
+      }
+    }
+    await page.evaluate(() =>
+      document
+        .querySelectorAll("[data-rail-notice]")
+        .forEach((el) => el.remove()),
+    );
   } finally {
     await page.goto("about:blank");
     const profiles = (

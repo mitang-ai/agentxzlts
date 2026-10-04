@@ -388,6 +388,23 @@ label select {
   overflow: hidden;
   background: white;
 }
+/* SiteProvider renders notices before the app. Share the viewport instead of
+   adding a full-height app below them and clipping the rail's bottom actions. */
+body:has(> .app) {
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+body:has(> .app) > .site-announcement,
+body:has(> .app) > .site-sync-error {
+  flex-shrink: 0;
+}
+body:has(> .app) > .app {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+}
 .rail {
   width: 76px;
   flex-shrink: 0;
@@ -636,7 +653,7 @@ label select {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  height: 100dvh;
+  height: 100%;
   overflow: hidden;
 }
 .workspace > .splash {
@@ -1740,6 +1757,10 @@ label select {
   .rail-brand {
     display: none;
   }
+  .rail-bottom > button,
+  .rail-bottom > a {
+    min-height: 32px;
+  }
 }
 @media (min-width: 1600px) {
   .room-header,
@@ -1883,7 +1904,7 @@ label select {
     width: 100%;
     border: 0;
     padding: 25px 15px 82px;
-    height: 100dvh;
+    height: 100%;
   }
   .room-list header {
     padding: 0 10px;
