@@ -22,13 +22,17 @@
     "island:start": "node scripts/serve.mjs",
     "island:stop": "node scripts/serve.mjs --stop",
     "island:status": "node scripts/serve.mjs --status",
-    "service:install": "node scripts/service.mjs"
+    "service:install": "node scripts/service.mjs",
+    "desktop:build": "node scripts/build-desktop.mjs",
+    "test:desktop": "node scripts/test-desktop.mjs"
   },
   "devDependencies": {
     "@modelcontextprotocol/client": "2.2.0",
     "@playwright/test": "^1.58.2",
     "@types/node": "^24.0.0",
     "@types/pg": "^8.23.1",
+    "electron": "44.5.1",
+    "electron-builder": "26.15.3",
     "prettier": "^3.9.9",
     "supabase": "^2.80.0",
     "typescript": "^5.9.3",

@@ -363,7 +363,17 @@ export default function MyAgents({
   useEffect(() => {
     void refresh();
     const t = setInterval(() => void refresh(), 5000);
-    return () => clearInterval(t);
+    const desktopRefresh = (event: Event) => {
+      event.preventDefault();
+      // Replace server data, not component identity: nickname/avatar editors,
+      // pending invitation details and the user's room choice remain intact.
+      void refresh();
+    };
+    window.addEventListener("island-desktop-refresh", desktopRefresh);
+    return () => {
+      clearInterval(t);
+      window.removeEventListener("island-desktop-refresh", desktopRefresh);
+    };
   }, [refresh]);
   async function action(path: string, input: Row) {
     setBusy(true);
@@ -384,6 +394,15 @@ export default function MyAgents({
         <h1>我的 Agent</h1>
         <p>
           先连接一次，再添加到不同房间；每个房间分别批准。一个设备一次只处理一个房间。
+        </p>
+        <p>
+          <a href="/guide" target="_blank" rel="noopener noreferrer">
+            操作指南
+          </a>{" "}
+          ·{" "}
+          <a href="/guide#download" target="_blank" rel="noopener noreferrer">
+            Windows 客户端与安装引导
+          </a>
         </p>
         <button className="text-button" onClick={() => void refresh()}>
           刷新

@@ -1,0 +1,226 @@
+.operation-guide {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 28px 32px 64px;
+  color: #273547;
+}
+.guide-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+  padding-bottom: 24px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 13px;
+}
+.guide-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent);
+}
+.guide-introduction {
+  padding: 40px 0 28px;
+  max-width: 900px;
+}
+.guide-eyebrow {
+  color: var(--muted);
+  font-size: 13px;
+}
+.guide-introduction h1 {
+  margin: 8px 0 16px;
+  font-size: 34px;
+  letter-spacing: -1px;
+}
+.guide-introduction > p {
+  line-height: 1.9;
+}
+.guide-tools {
+  margin-top: 22px;
+}
+.guide-tool-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.guide-copy-status {
+  margin-top: 12px;
+  min-height: 20px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.guide-download {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 32px;
+  padding: 26px;
+  background: #f5f7fa;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  scroll-margin-top: 20px;
+}
+.guide-download h2 {
+  margin: 0 0 12px;
+  font-size: 21px;
+}
+.guide-download p {
+  font-size: 13px;
+  line-height: 1.8;
+  margin: 8px 0;
+}
+.guide-release code {
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+.guide-release summary {
+  cursor: pointer;
+  font-size: 13px;
+  margin: 12px 0;
+}
+.guide-warning {
+  color: #8b591c;
+}
+.guide-diagram {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 14px 18px;
+  margin: 28px 0;
+}
+.guide-diagram > div {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.guide-diagram > span {
+  align-self: center;
+  color: var(--muted);
+}
+.guide-diagram strong {
+  font-size: 14px;
+}
+.guide-diagram div span {
+  font-size: 12px;
+  color: var(--muted);
+}
+.guide-body {
+  display: grid;
+  grid-template-columns: 235px minmax(0, 1fr);
+  gap: 42px;
+  margin-top: 40px;
+}
+.guide-contents {
+  align-self: start;
+  position: sticky;
+  top: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  font-size: 13px;
+  padding: 18px 0;
+}
+.guide-contents strong {
+  font-size: 14px;
+  margin-bottom: 4px;
+}
+.guide-contents a {
+  line-height: 1.65;
+  color: #596b80;
+}
+.guide-contents a:hover,
+.guide-back:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.guide-body article section {
+  padding: 8px 0 30px;
+  margin-bottom: 24px;
+  border-bottom: 1px solid var(--line);
+  scroll-margin-top: 24px;
+}
+.guide-body article h2 {
+  font-size: 21px;
+  margin: 0 0 18px;
+}
+.guide-body article p,
+.guide-body article li {
+  font-size: 14px;
+  line-height: 1.95;
+}
+.guide-body article p {
+  margin: 12px 0;
+}
+.guide-body article ol {
+  padding-left: 24px;
+}
+.guide-body article li {
+  padding-left: 4px;
+  margin: 6px 0;
+}
+.guide-note {
+  font-size: 13px;
+  line-height: 1.9;
+  margin-top: 20px;
+  border-left: 3px solid #8496ae;
+  background: #f6f8fb;
+  padding: 13px 16px;
+}
+.guide-body article a {
+  color: var(--accent);
+  font-size: 14px;
+}
+.guide-install-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.guide-install-actions p {
+  flex-basis: 100%;
+}
+@media (max-width: 760px) {
+  .operation-guide {
+    padding: 20px 18px 40px;
+  }
+  .guide-header {
+    align-items: flex-start;
+    font-size: 12px;
+  }
+  .guide-introduction {
+    padding-top: 28px;
+  }
+  .guide-introduction h1 {
+    font-size: 28px;
+  }
+  .guide-download {
+    grid-template-columns: 1fr;
+    gap: 18px;
+    padding: 20px;
+  }
+  .guide-body {
+    grid-template-columns: 1fr;
+    gap: 18px;
+    margin-top: 22px;
+  }
+  .guide-contents {
+    position: static;
+    padding: 14px;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+  }
+  .guide-body article h2 {
+    font-size: 19px;
+  }
+  .guide-diagram {
+    gap: 10px;
+  }
+  .guide-diagram > div {
+    padding: 12px;
+  }
+  .guide-diagram strong {
+    font-size: 12px;
+  }
+}

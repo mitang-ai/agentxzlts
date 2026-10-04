@@ -15,6 +15,7 @@ import {
   writeFile,
   readFile,
   stat,
+  chmod,
   rm,
 } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -41,7 +42,7 @@ import {
 // @ts-ignore
 import { provision, finishInstallation } from "../scripts/setup/provision.mjs";
 // @ts-ignore
-import { validateInput } from "../scripts/setup/install.mjs";
+import { validateInput, prepareDependencies } from "../scripts/setup/install.mjs";
 // @ts-ignore
 import { migrate } from "../scripts/migrate.mjs";
 // @ts-ignore
@@ -113,6 +114,23 @@ const admin = {
   password: "Wizard-Owner-Password-2026",
   nickname: "安装管理员",
 };
+test.skipIf(process.platform === "win32")("网站依赖准备跳过桌面二进制，不改变父进程环境或运行桌面安装器", async () => {
+  const bin = resolve(root, "fixture-bin"), capture = resolve(root, "dependency-command.json"), script = resolve(bin, "capture.mjs");
+  await mkdir(bin, { recursive: true });
+  await writeFile(script, `import{writeFile}from'node:fs/promises';await writeFile(${JSON.stringify(capture)},JSON.stringify({args:process.argv.slice(2),skip:process.env.ELECTRON_SKIP_BINARY_DOWNLOAD}));`);
+  const quote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
+  await writeFile(resolve(bin, "npm"), `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(script)} "$@"\n`);
+  await chmod(resolve(bin, "npm"), 0o700);
+  process.env.PATH = bin + ":" + process.env.PATH;
+  process.env.ISLAND_ROOT = root;
+  process.env.ISLAND_CONFIG_FILE = resolve(root, ".dependency-test/config.json");
+  process.env.ELECTRON_SKIP_BINARY_DOWNLOAD = "0";
+  await prepareDependencies();
+  const actual = JSON.parse(await readFile(capture, "utf8"));
+  expect(actual.args[0]).toBe("ci");
+  expect(actual.skip).toBe("1");
+  expect(process.env.ELECTRON_SKIP_BINARY_DOWNLOAD).toBe("0");
+});
 test("统一配置在工作区、Web 与独立脚本一致，保存配置优先于旧环境文件", async () => {
   await mkdir(resolve(root, "apps/web"), { recursive: true });
   await writeFile(

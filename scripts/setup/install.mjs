@@ -149,7 +149,8 @@ export async function prepareDependencies() {
         "--no-audit",
         "--no-fund",
       ],
-      {},
+      // Website setup needs Node/Next, never the separate desktop executable.
+      { ELECTRON_SKIP_BINARY_DOWNLOAD: "1" },
       () => {},
     );
   } finally {
@@ -298,7 +299,7 @@ export async function install(raw) {
         "--no-audit",
         "--no-fund",
       ],
-      {},
+      { ELECTRON_SKIP_BINARY_DOWNLOAD: "1" },
       (line) => {
         void log(line);
       },

@@ -1,4 +1,7 @@
-import { randomUUID, randomBytes } from "node:crypto";
+import { randomUUID, randomBytes, createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import { repositoryRoot } from "@island/runtime";
 import { z } from "zod";
 import { digest, safePath } from "./archive.mjs";
 import { fail, turnResultSchema } from "./protocol.mjs";
@@ -71,6 +74,18 @@ export const registryMethods = {
         p,
         await this.vault.open(p.code_cipher, `invite:${p.id}`),
         origin,
+        {
+          desktopInstallerDigest: createHash("sha256")
+            .update(
+              await readFile(
+                /* turbopackIgnore: true */ resolve(
+                  repositoryRoot(),
+                  "apps/web/public/desktop/install.ps1",
+                ),
+              ),
+            )
+            .digest("hex"),
+        },
       );
     });
   },

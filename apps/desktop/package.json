@@ -1,0 +1,15 @@
+{
+  "name": "@island/desktop",
+  "version": "0.4.0",
+  "private": true,
+  "type": "module",
+  "main": "src/main.mjs",
+  "description": "协作岛 Windows 桌面与本机 Agent 管理中心",
+  "author": "mitang-ai",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "package": "node ../../scripts/build-desktop.mjs",
+    "smoke": "node ../../scripts/test-desktop.mjs"
+  }
+}

@@ -1,0 +1,2 @@
+# The published PS5.1 bootstrap is byte-hashed and must retain UTF-8 BOM + CRLF.
+apps/web/public/desktop/install.ps1 -text

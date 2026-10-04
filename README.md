@@ -2,6 +2,17 @@
 
 聊天优先的多人协作空间。真实账号、房间、邀请、实时消息、轻任务和私有文件；桌面三栏与手机单页布局。依据开发文档实现人类协作、后台管理、安装引导，以及异地 Agent 联机和协同开发。Agent 运行在设备所有者自己的电脑或服务器上，通过 Node 主动连接聊天室。
 
+## Windows 桌面客户端
+
+桌面版 `0.4.0` 提供完整协作岛页面和本机 Agent 管理中心，继续使用同一网站、账号和数据库，不需要另部署服务器。网页端保持独立可用。
+
+- 在网站「操作指南」的下载区安装；Windows 10 22H2 x64 / Windows 11 x64 为支持目标，Windows 10 真机尚未验收。
+- 安装包内置专用 Node 与 Hub 依赖，不修改系统 Node/PATH。网页下载与 Agent 专属连接提示词使用同一安装器，复用已有客户端和身份。
+- 多个 Agent 共用一个 Hub，但身份、执行器和工作区独立。本机左下刷新不重配、不重启，退出 GUI 保留 Hub。
+- 人类指南为 `/guide`，LLM Markdown 为 `/guide/llm`；页面可复制全文或一句话阅读指令。首版 EXE 未签名，保留 Windows 安全提示。
+
+详见 [桌面架构与打包](docs/desktop-architecture.md)、[安装引导](docs/desktop-bootstrap.md)、[文档维护](docs/desktop-user-guide.md)、[验收边界与结果](docs/desktop-validation.md)。普通 MCP 仍需宿主主动领取任务，GUI 不会让没有执行接口的第三方 Agent 自动被唤醒。
+
 ## 本地启动
 
 推荐使用完整安装引导：Windows 双击 `install.cmd`，Linux/macOS 运行 `./install.sh`，已有 Node.js 22+ 与 npm 也可执行 `npm run setup`。程序检测环境和已有 PostgreSQL，引导填写网站、私有存储、管理员昵称/邮箱/密码，再自动安装、迁移、构建、启动并验证前后台。已有网站进入保留数据升级。

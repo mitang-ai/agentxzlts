@@ -453,6 +453,28 @@ label select {
   color: #8995a9;
   font-size: 11px;
 }
+.rail-bottom .rail-resource {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: #8995a9;
+  font-size: 10px;
+  text-align: center;
+}
+.rail-bottom .rail-resource:hover {
+  color: var(--accent);
+}
+.auth-resources {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  margin-top: 12px;
+}
+.auth-resources a:hover {
+  color: var(--accent);
+}
 .room-list {
   width: 274px;
   flex-shrink: 0;
@@ -1807,6 +1829,9 @@ label select {
     width: 60px;
   }
   .rail .rail-settings {
+    display: none;
+  }
+  .rail-bottom .rail-resource {
     display: none;
   }
   .room-list {

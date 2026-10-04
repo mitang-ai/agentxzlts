@@ -263,7 +263,17 @@ function Auth({
           </p>
         </section>
       </div>
-      <footer>把想法放在一起，把事情一起做好。</footer>
+      <footer>
+        把想法放在一起，把事情一起做好。
+        <div className="auth-resources">
+          <a href="/guide" target="_blank" rel="noopener noreferrer">
+            操作指南
+          </a>
+          <a href="/guide#download" target="_blank" rel="noopener noreferrer">
+            Windows 客户端
+          </a>
+        </div>
+      </footer>
       <SiteFooter />
     </main>
   );
@@ -410,6 +420,25 @@ export default function Island() {
     const timer = setInterval(() => void refreshRooms(), 15000);
     return () => clearInterval(timer);
   }, [user, refreshRooms]);
+  useEffect(() => {
+    const refresh = (event: Event) => {
+      // A data refresh acknowledges the native shell request without reloading
+      // the document, so drafts, reply selections and open editors survive.
+      event.preventDefault();
+      if (!user) return;
+      void refreshRooms();
+      const id = currentRef.current;
+      if (id) void load(id);
+      if (primary === "tasks")
+        void api<{
+          tasks: (Task & { room_name: string; room_icon: string })[];
+        }>("tasks")
+          .then((data) => setGlobalTasks(data.tasks))
+          .catch((error) => notify((error as Error).message));
+    };
+    window.addEventListener("island-desktop-refresh", refresh);
+    return () => window.removeEventListener("island-desktop-refresh", refresh);
+  }, [user, primary, refreshRooms, load, notify]);
   useEffect(() => {
     if (!roomId || !user) return;
     let disposed = false;
@@ -812,6 +841,41 @@ export default function Island() {
             ))}
         </nav>
         <div className="rail-bottom">
+          <a
+            className="rail-resource"
+            href="/guide"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="操作指南"
+            title="操作指南"
+          >
+            <FileText size={20} />
+            <span>操作指南</span>
+          </a>
+          <a
+            className="rail-resource"
+            href="/guide#download"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="Windows 客户端下载"
+            title="Windows 客户端下载"
+          >
+            <Download size={20} />
+            <span>客户端下载</span>
+          </a>
+          <button
+            className="rail-resource"
+            aria-label="刷新界面"
+            title="刷新数据，不重启 Agent"
+            onClick={() =>
+              window.dispatchEvent(
+                new Event("island-desktop-refresh", { cancelable: true }),
+              )
+            }
+          >
+            <RefreshCw size={20} />
+            <span>刷新</span>
+          </button>
           <button
             className="rail-settings"
             aria-label="设置"
