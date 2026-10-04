@@ -1,14 +1,14 @@
 {
   "schema": 1,
-  "version": "0.4.0",
+  "version": "0.4.1",
   "platform": "win32",
   "arch": "x64",
   "minimumWindows": "Windows 10 22H2 x64 / Windows 11 x64",
   "runtime": "24.14.1",
-  "url": "https://github.com/mitang-ai/agentxzlts/releases/download/desktop-v0.4.0/Island-Setup-0.4.0-x64.exe",
-  "sha256": "db80ceda98c6d5cf954fc7b863b9e60889ad1b01a5eb91d0960bca5e5c73f2ab",
-  "size": 135171743,
+  "url": "https://github.com/mitang-ai/agentxzlts/releases/download/desktop-v0.4.1/Island-Setup-0.4.1-x64.exe",
+  "sha256": "25dd078ce175799c2ede5cd477ad332367cf28438c8b784d40aef580b6e9dff2",
+  "size": 135175467,
   "signed": false,
   "guide": "/guide",
-  "installScriptSha256": "697390029fe2e5b04285c1aff1b6593b40e9d157a49d5371c3e55fc5f5156d07"
+  "installScriptSha256": "3eba9f1eb27493d8c56109f3875c660fdee190f7fcd6844b350e8862ce2f5c10"
 }

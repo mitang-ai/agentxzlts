@@ -17,7 +17,7 @@ $script:Ui = $null
 $script:Progress = $null
 $script:Status = $null
 $script:CurrentStage = ''
-$script:SupportedVersion = '0.4.0'
+$script:SupportedVersion = '0.4.1'
 $script:DownloadTimeoutSeconds = 600
 
 function Update-SetupProgress([string]$Stage, [int]$Percent = -1) {
@@ -126,7 +126,7 @@ function New-SetupHttpClient {
   $handler.AllowAutoRedirect = $false
   $client = New-Object System.Net.Http.HttpClient($handler)
   $client.Timeout = [TimeSpan]::FromSeconds($script:DownloadTimeoutSeconds)
-  $client.DefaultRequestHeaders.UserAgent.ParseAdd('Island-Desktop-Setup/0.4.0')
+  $client.DefaultRequestHeaders.UserAgent.ParseAdd('Island-Desktop-Setup/0.4.1')
   return $client
 }
 

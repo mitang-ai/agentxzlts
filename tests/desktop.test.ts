@@ -498,3 +498,34 @@ runtimeTest("既有MCP身份在GUI准备完成前请求配置，先验证并绑�
     expect(await stat(registry + ".control.json").catch(() => null)).toBeNull();
   } finally { await rm(f.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); }
 }, 120000);
+
+runtimeTest("小管家后台启动复用同一Hub，确认停止且重开保留注册表", async () => {
+  const f=await fixture(true),controller=new DesktopController({...f.options,origin:"https://www.51wanai.com"});
+  let sdk:any;
+  const registry=resolve(controller.clientRoot,".data/hub/registry.json");
+  try{
+    await controller.prepare();sdk=await controller.sdk();
+    await mkdir(dirname(registry),{recursive:true});
+    await writeFile(registry+".control.json",JSON.stringify({fixtureInvalid:true}));
+    expect((await controller.status()).statusError).toMatch(/无法核实/);
+    await expect(controller.stopHub()).rejects.toThrow(/不能确认/);
+    await unlink(registry+".control.json");
+    const started=await Promise.all([controller.startHub(),controller.startHub()]);
+    expect(started.every(v=>v.running)).toBe(true);
+    const before=await sdk.runtimeStatus(registry);
+    expect(before.running).toBe(true);
+    expect((await controller.startHub()).reused).toBe(true);
+    expect((await sdk.runtimeStatus(registry)).pid).toBe(before.pid);
+    const saved=await readFile(registry);
+    expect(await controller.stopHub()).toEqual({stopped:true});
+    expect(await sdk.runtimeStatus(registry)).toBeNull();
+    expect(await controller.stopHub()).toEqual({stopped:true,alreadyStopped:true});
+    expect(await readFile(registry)).toEqual(saved);
+    expect((await controller.startHub()).running).toBe(true);
+    expect(await readFile(registry)).toEqual(saved);
+  }finally{
+    if(sdk&&(await sdk.runtimeStatus(registry))?.running)await sdk.controlRequest(registry,"stop");
+    if(sdk)await until(async()=>!(await sdk.runtimeStatus(registry)),15000);
+    await rm(f.root,{recursive:true,force:true,maxRetries:10,retryDelay:100});
+  }
+},120000);

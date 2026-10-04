@@ -804,9 +804,9 @@ export default function Island() {
     <div
       className={`app ${roomId ? "room-open" : ""} ${["tasks", "my-agents", "agent-preview"].includes(primary) ? "tasks-open" : ""}`}
     >
-      <aside className="rail">
+      <aside className="rail" aria-label="协作岛导航">
         <SiteBrand rail />
-        <nav>
+        <nav aria-label="主要功能">
           {[
             { key: "chat", label: "聊天", icon: <MessageCircle size={21} /> },
             { key: "rooms", label: "房间", icon: <House size={21} /> },
@@ -834,6 +834,7 @@ export default function Island() {
                   if (n.key === "rooms") setRoomId(null);
                 }}
                 aria-label={n.label}
+                title={n.label}
               >
                 {n.icon}
                 <span>{n.label}</span>
@@ -879,6 +880,7 @@ export default function Island() {
           <button
             className="rail-settings"
             aria-label="设置"
+            title="设置"
             onClick={() => setModal("profile")}
           >
             <Settings size={21} />

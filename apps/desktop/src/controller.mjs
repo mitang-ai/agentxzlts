@@ -1,4 +1,4 @@
-import {readFile,mkdir,access,realpath} from "node:fs/promises";
+import {readFile,mkdir,access,realpath,open} from "node:fs/promises";
 import {resolve} from "node:path";
 import {pathToFileURL} from "node:url";
 import {randomUUID} from "node:crypto";
@@ -22,10 +22,12 @@ export class DesktopController{
   async status(){
     try{
       await access(resolve(this.clientRoot,"packages/node/bin/island-node.mjs"));const sdk=await this.sdk(),hub=await sdk.runtimeStatus(resolve(this.clientRoot,".data/hub/registry.json"));
+      let statusError=null;
+      if(!hub){try{await access(resolve(this.clientRoot,".data/hub/registry.json.control.json"));statusError="小管家管理接口暂时无法核实，不能确认后台已经停止。"}catch(e){if(e.code!=="ENOENT")throw e}}
       const identities=[];for(const p of await this.profiles()){
         const live=await sdk.runtimeStatus(p.file);
         identities.push(publicStatus({...live,enabled:p.enabled,node_id:p.config.node_id,name:p.config.agent_name,adapter:p.config.adapter,host:p.config.host_name,state:live?.state||"stopped"}));
-      }return{installed:true,version:this.version,hub:publicStatus(hub||{}),identities};
+      }return{installed:true,version:this.version,hub:publicStatus(hub||{}),identities,...(statusError?{statusError}:{})};
     }catch(e){if(e.code==="ENOENT")return{installed:false,version:this.version,hub:publicStatus(),identities:[]};throw e}
   }
   async run(args){
@@ -55,4 +57,43 @@ export class DesktopController{
   async startIdentity(id){const p=await this.owned(id);await this.run(["start",...(p.config.adapter==='mcp'?['--managed']:[]),"--background","--config",p.file]);return{ok:true}}
   async stopIdentity(id){const p=await this.owned(id);const sdk=await this.sdk();const live=await sdk.runtimeStatus(p.file);if(live)await sdk.controlRequest(p.file,"stop");return{ok:true}}
   async mcpConfiguration(id){const p=await this.owned(id);if(p.config.adapter!=="mcp")throw Error("此身份不是手动 MCP 方式。");if(!this.node)await this.prepare();return JSON.stringify({mcpServers:{["island-"+id]:{command:this.node,args:[resolve(this.clientRoot,"packages/node/bin/island-node.mjs"),"mcp","--config",p.file]}}},null,2)}
+  async startHub(){
+    if(this.startingHub)return this.startingHub;
+    this.startingHub=this.doStartHub();
+    try{return await this.startingHub}finally{this.startingHub=null}
+  }
+  async doStartHub(){
+    if(!this.node)await this.prepare();
+    const sdk=await this.sdk(),file=resolve(this.clientRoot,".data/hub/registry.json");
+    let state=await sdk.runtimeStatus(file);
+    if(state?.running){if(state.version!=="hub-1")throw Error("小管家版本不兼容，不启动第二份后台。");return{running:true,reused:true}}
+    const {protectDirectory}=await import(pathToFileURL(resolve(this.clientRoot,"packages/node/src/io.mjs")).href);
+    await protectDirectory(resolve(this.clientRoot,".data/hub"));
+    const log=await open(file+".runtime.log","a",0o600);
+    try{
+      const child=spawn(this.node,[resolve(this.clientRoot,"packages/node/bin/island-node.mjs"),"hub-run"],{cwd:this.clientRoot,detached:true,windowsHide:true,shell:false,stdio:["ignore",log.fd,log.fd],env:{...process.env,ISLAND_NODE_CONFIG:""}});
+      await new Promise((yes,no)=>{child.once("spawn",yes);child.once("error",no)});child.unref();
+    }finally{await log.close()}
+    const deadline=Date.now()+20000;
+    do{
+      state=await sdk.runtimeStatus(file);
+      if(state?.running){if(state.version!=="hub-1")throw Error("小管家版本不兼容，不接管其它后台。");return{running:true,reused:false}}
+      await new Promise(r=>setTimeout(r,150));
+    }while(Date.now()<deadline);
+    throw Error("小管家启动未能确认，请检查状态；不会抢占或结束其它进程。");
+  }
+  async stopHub(){
+    const sdk=await this.sdk(),file=resolve(this.clientRoot,".data/hub/registry.json");
+    const controlExists=async()=>{try{await access(file+".control.json");return true}catch(e){if(e.code==="ENOENT")return false;throw e}};
+    const state=await sdk.runtimeStatus(file);
+    if(!state){if(await controlExists())throw Error("无法核实小管家管理接口，不能确认它已经退出。");return{stopped:true,alreadyStopped:true}}
+    if(state.version!=="hub-1")throw Error("小管家版本不兼容，不停止未知后台。");
+    await sdk.controlRequest(file,"stop",{},{timeout:10000});
+    const deadline=Date.now()+20000;
+    do{
+      if(!(await sdk.runtimeStatus(file))&&!(await controlExists()))return{stopped:true};
+      await new Promise(r=>setTimeout(r,150));
+    }while(Date.now()<deadline);
+    throw Error("小管家尚未确认退出，连接或任务可能仍在收尾，请稍后检查。");
+  }
 }

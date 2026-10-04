@@ -1,6 +1,8 @@
 import { isAbsolute } from "node:path";
 export const OFFICIAL_ORIGIN = "https://www.51wanai.com";
-export const ACTIONS = new Set(["status","prepare","add","start","stop","pick-workspace","pick-command","copy-mcp","website","manager","guide","refresh","settings"]);
+// Pairing and executor configuration remain in the invitation/Agent flow,
+// not in a privileged desktop form. Only the keeper window owns these actions.
+export const ACTIONS = new Set(["status","prepare","guide","refresh","settings","check-update","open-update"]);
 export function permittedNavigation(value, origin = OFFICIAL_ORIGIN) {
   try { const u = new URL(value); return u.origin === origin && !u.username && !u.password; } catch { return false; }
 }

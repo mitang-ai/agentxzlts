@@ -58,7 +58,7 @@ function manifest(
 ) {
   return {
     schema: 1,
-    version: "0.4.0",
+    version: "0.4.1",
     platform: "win32",
     arch: "x64",
     url,
@@ -69,6 +69,17 @@ function manifest(
 }
 const asPS = (value: unknown) =>
   "(" + psString(JSON.stringify(value)) + " | ConvertFrom-Json)";
+
+it("published desktop manifest matches the bootstrap version and exact script bytes", async () => {
+  const bytes = await readFile(script);
+  const release = JSON.parse(await readFile(resolve("apps/web/public/desktop/release.json"), "utf8"));
+  const desktop = JSON.parse(await readFile(resolve("apps/desktop/package.json"), "utf8"));
+  const supported = bytes.toString("utf8").match(/\$script:SupportedVersion = '([^']+)'/)?.[1];
+  expect(supported).toBe(desktop.version);
+  expect(release.version).toBe(desktop.version);
+  expect(release.installScriptSha256).toBe(createHash("sha256").update(bytes).digest("hex"));
+  expect(bytes.toString("utf8")).toContain(`Island-Desktop-Setup/${release.version}`);
+});
 
 it("enrollment 明确 Windows 统一安装、脚本摘要、独立配置和非Windows保留Hub路径", async () => {
   const bytes = await readFile(script);
@@ -131,7 +142,7 @@ it.skipIf(!windows)(
     const f = await fixture();
     try {
       const valid = manifest(
-        "https://github.com/mitang-ai/agentxzlts/releases/download/desktop-v0.4.0/Island-Setup-0.4.0-x64.exe",
+        "https://github.com/mitang-ai/agentxzlts/releases/download/desktop-v0.4.1/Island-Setup-0.4.1-x64.exe",
       );
       const cases = [
         { ...valid, schema: "1" },
@@ -142,7 +153,7 @@ it.skipIf(!windows)(
         { ...valid, size: 0 },
         { ...valid, url: "https://evil.invalid/Island-Setup.exe" },
         { ...valid, url: valid.url + "?token=x" },
-        { ...valid, url: valid.url.replace("0.4.0-x64.exe", "0.3.0-x64.exe") },
+        { ...valid, url: valid.url.replace("0.4.1-x64.exe", "0.3.0-x64.exe") },
       ];
       const result = await runPS(
         f,
@@ -262,7 +273,7 @@ it.skipIf(!windows)(
       await mkdir(join(f.home, ".island-node"), { recursive: true });
       const bad = {
         schema: 1,
-        version: "0.4.0",
+        version: "0.4.1",
         ready: true,
         runtimeVersion: "24.14.1",
         exe: join(f.root, "attacker.exe"),
@@ -274,7 +285,7 @@ it.skipIf(!windows)(
       await writeFile(record, JSON.stringify(bad));
       const result = await runPS(
         f,
-        "$bad=$false;try{$null=Get-SetupLocator (Get-SetupPaths) '0.4.0'}catch{if($_.Exception.Message -notlike 'LOCATOR_PATH:*'){throw};$bad=$true};if(!$bad){throw 'forged path accepted'};Write-Output 'REFUSED'",
+        "$bad=$false;try{$null=Get-SetupLocator (Get-SetupPaths) '0.4.1'}catch{if($_.Exception.Message -notlike 'LOCATOR_PATH:*'){throw};$bad=$true};if(!$bad){throw 'forged path accepted'};Write-Output 'REFUSED'",
       );
       expect(result.stderr).toBe("");
       expect(result.exit).toBe(0);
@@ -339,7 +350,7 @@ it.skipIf(!windows)(
       );
       const locator = {
         schema: 1,
-        version: "0.4.0",
+        version: "0.4.1",
         ready: true,
         runtimeVersion: "24.14.1",
         exe,
@@ -369,7 +380,7 @@ it.skipIf(!windows)(
         " -OutputType ConsoleApplication;\n";
       const result = await runPS(
         f,
-        compile("GuiFixture", "0.4.0", exe) +
+        compile("GuiFixture", "0.4.1", exe) +
           compile("NodeFixture", "24.14.1", node) +
           "$ManifestUrl=" +
           psString(

@@ -30,12 +30,65 @@ node scripts/test-desktop.mjs --packaged-only --exe .data/desktop-release/out/wi
 | 并发与恢复 | 跨进程首次安装互斥，异常释放锁，未完成安装不标记成功，已有配置保留 |
 | 身份输入 | 不接受陌生字段、任意配置路径、网页来源请求和危险导航 |
 | 本机管理 | 配置路径只能来自本机注册表；状态不泄漏凭据；多身份共用 Hub、不重复启动 |
-| GUI | 完整网页视图与本机管理切换；左下刷新不重新配对/重启 Hub；未提交输入不丢失 |
+| GUI | 正式网页独立占满主窗口，无叠加导航/底栏；小管家独立设置窗口；网页刷新不重新配对/重启 Hub、草稿不丢失 |
 | 权限边界 | 远程网页无 Node/preload，本地主框架以外不能调用 IPC；未知动作拒绝 |
-| 生命周期 | 关闭 GUI 不停止 Hub；只按本次隔离 registry 控制测试后台，最后精确停止 |
+| 生命周期 | 默认 X 隐藏托盘保留 Hub；开启退出选项后先确认 Hub 停止再退出 GUI；后台启动不弹网站；只控制隔离 registry |
 | 打包 | 最终 Windows EXE 可启动，不依赖系统 Node/npm；安装产物运行时不是 Electron executable |
 
-## 当前结果
+## 0.4.1 小管家简化验收
+
+2026-10-04 UTC，Windows 11 x64，Electron `44.5.1`：最终 **0.4.1 原生 EXE GUI 11 组通过**，记录 `.data/desktop-validation/2026-10-04T07-11-52-448Z/report.json`。同目录 `packaged-keeper.png`、`packaged-website.png` 已实际查看，版本显示 `0.4.1`，正式网页无本机壳栏，小管家独立轻量窗口。
+
+| 本轮实际验证 | 结果与证据 |
+| --- | --- |
+| 最终原生 EXE 真实 GUI | 11 组通过；上述 `07-11-52-448Z/report.json`，含首次/双身份后刷新成功 notice、普通与 legacy 重复后台不弹网站 |
+| 引导/指南/偏好/更新单元回归 | 10 + 7 + 7 + 32 = 56 项通过；`.data/desktop-keeper-validation/final-56-tests.log`，4 个测试文件 |
+| 轻量小管家 bridge fixture | 9 组通过；`.data/keeper-ui-validation/report.json`，含状态无法核实时不报刷新成功且偏好仍可修改 |
+| 先前开发 Electron GUI | 11 组通过；`.data/desktop-validation/2026-10-04T06-58-39-365Z/report.json`。开发版本号显示 Electron 版本，不替代最终 EXE 结论 |
+
+最终 GUI 产物摘要（**不是 NSIS 安装包摘要**）：
+
+```text
+win-unpacked/Island.exe
+SHA256 c5ff06dd5cca9d8d553349447de68ccd4ca1c10f78f618025ad35ede73248788
+win-unpacked/resources/app.asar
+SHA256 4c6480f81c6e58b861aab43645da3697e406ca77f6db41eb35e5fd20f84cf087
+```
+
+本次 packaged-only 直接执行上述 EXE 的正式 ASAR，未添加 `-r`、替代入口、外部 payload/Node，未修改 bundle；只启用本机 inspector/CDP、独立 home、loopback fixture 和 `--smoke-test --show-keeper`。该结论不包括新 NSIS 的真实安装/卸载、整机重启、真实 GitHub 网络和正式服务器联机。
+
+本轮保留原安全和生命周期断言，并调整为新的轻量界面：
+
+- 默认网站直接使用独立 `BrowserWindow`，无嵌套 `WebContentsView`、本机导航或底栏；小管家只含状态、两个偏好、更新和指南，无复杂身份表单或身份操作按钮。
+- `start`、`stop`、`add`、`copy-mcp` 已删除 IPC，必须拒绝；未知动作、陌生设置字段、自定义更新 URL 拒绝。相同 URL/preload 的其他窗口仍不能调用 IPC，正式网页没有 Node、preload 或 bridge。
+- 网页刷新保留草稿且不重载；小管家刷新仅读取状态且不启动 Hub；指南独立沙箱窗口不替换当前聊天。
+- 两身份通过测试 Controller API 预置，**不代表 GUI 仍能配对**。状态只读，不泄漏 token/本机路径；重复启动复用 Hub，单身份停止不影响另一身份。
+- 真实主窗口 X 默认隐藏托盘，GUI/Hub 继续存在；启用退出小管家偏好后，X 先确认 Hub 已停止再退出 GUI。重开后原配置 SHA 和配对次数不变。
+- 模拟 Windows 登录启动参数 `--hub-only --startup`，不弹网站窗口，恢复已启用 Hub；重复后台实例和旧 `--startup` 第二实例退出且不新增窗口/网站访问，普通第二实例才打开同一后台 GUI 进程，不重配对。测试只写隔离 home 偏好，不写真实 Windows 自启动注册表，**不是整机重启/自启验收**。
+- 最后只按隔离 registry 停止测试 Hub 并清理临时身份。Playwright 的 context close 会触发 X 隐藏，因此测试助手显式调用 `app.quit()` 走正式退出策略，不能误把窗口隐藏当成进程退出。
+
+轻量小管家 UI 的额外 Chromium fixture 9 组通过，记录 `.data/keeper-ui-validation/report.json`：设置失败回滚、更新查询错误/旧缓存不伪报最新版、显式打开 GitHub 发布页、安装进度完成后收起、HTML 昵称纯文本及 390px 横向不溢出。这是 bridge fixture，不是最终 EXE、真实 GitHub 网络或真实服务器验收。
+
+### 重跑与已排除的测试误差
+
+- 首次开发重开退出失败 `06-55-20-667Z`：Playwright context close 触发 X 隐藏，不等于产品退出。测试改为显式 `app.quit()` 走正式退出策略，再证明 GUI PID 消失。
+- packaged `07-04-22-402Z` 的小管家刷新和 `07-10-06-488Z` 的网页刷新点击超时：独立窗口在其他网页/指南后处于后台，Chromium 的稳定性检测等待 native 帧。测试现在在每次真实点击/输入前恢复、显示并聚焦对应的真实 `BrowserWindow`，不使用 force-click、不删除稳定性/安全断言、不改应用视图。
+- 中间 ASAR 的 `07-05-51-674Z` 不能作为最终通过证据：审查发现 `load()` 没有返回状态，刷新成功提示未显示。产品修复后重新打包，新增首次与双身份刷新必须出现“状态已刷新”的断言，再对上述最终 `4c6480…` ASAR 完整重跑通过。
+- 所有失败记录保留，每次仅按测试隔离 registry/PID 清理自己的 Hub/GUI，未覆盖用户已安装客户端或真实身份目录。
+
+Windows 桌面/偏好/GitHub 检查/指南单元与进程测试 61 项通过（`.data/desktop-keeper-validation/unit-tests.log`）。最终状态错误补丁后再针对小管家后台启动一项复跑通过（`hub-final.log`），以及偏好/更新/指南 46 项复跑通过（`preferences-final.log`）；复跑不是新增 47 个用例。新增真实进程用例证明启动并发复用一个 Hub、停止确认、保留注册表、重新启动；管理控制文件存在但不可核实时报告未知状态，停止操作不能伪成功。
+
+匿名 GitHub 真实读取通过：模块在当前 0.4.1 对已发布 0.4.0 返回 `ahead`，没有误报已有新包；`.data/desktop-keeper-validation/github-live.json`。新版未发布时这个结果是预期状态，不代表 0.4.1 已在 GitHub 上线。
+
+Windows PowerShell 引导 10 项通过（`bootstrap-final.log`），新增检查发布清单、桌面包与引导脚本版本一致，以及脚本实际字节 SHA-256 与清单一致，避免新版本被旧安装引导拒绝。脚本保留原 UTF-8 BOM 和换行字节。
+
+本轮没有执行真实 NSIS 安装/升级：只读门禁发现本机已经安装 0.4.0，且真实定位记录为 `ready:true`，因此停止安装验收，不覆盖现有安装及 Hub。证据为 `.data/desktop-keeper-validation/user-install-gate-2026-10-04T07-05-27-540Z.json`。0.4.1 的真实 NSIS 安装、整机自启和 Windows 10 真机仍需另行验收。
+
+网页侧栏隔离 E2E 两次通过，覆盖 1366×900/768/640、1024×768 常见高度无导航滚动，1366×300 底部固定/主导航应急滚动，以及 390×844、320×568 手机无横向溢出。截图实际查看，证据 `.data/compact-sidebar/e2e.log`；测试数据库/服务已按自己的 PID 停止。TypeScript 检查通过。
+
+## 0.4.0 历史结果
+
+以下为旧版归档结果，不能据此声称新界面最终 EXE 已验收。
 
 2026-10-04 UTC（本机 2026-10-03），Windows 11 x64 `10.0.26300`、Node `24.14.1`、Electron `44.5.1`、Playwright `1.63.0`：
 

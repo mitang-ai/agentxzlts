@@ -1,1 +1,38 @@
-*{box-sizing:border-box}body{margin:0;background:#f7f7f4;color:#1f302a;font:14px/1.6 "Segoe UI","Microsoft YaHei",sans-serif}header{height:52px;display:flex;align-items:center;gap:28px;padding:0 22px;background:#fff;border-bottom:1px solid #ddd}header strong{font-size:19px}nav{display:flex;gap:8px}.version{margin-left:auto;color:#738078;font-size:12px}button{font:inherit;border:1px solid #d3d9d3;border-radius:6px;background:#fff;color:#33453a;padding:7px 12px;cursor:pointer}button:hover{background:#eef3ee}button:disabled{opacity:.5;cursor:wait}button.active,button.primary{background:#266450;color:#fff;border-color:#266450}main{position:absolute;top:52px;bottom:52px;left:0;right:0;overflow:auto;padding:24px max(24px,calc((100% - 1040px)/2))}.intro{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;gap:18px}h1{font-size:23px;margin:0 0 6px}h2{font-size:17px;margin:0 0 14px}p{margin:6px 0 12px}.card{border:1px solid #dce2dc;background:#fff;border-radius:10px;padding:22px;margin:16px 0}.muted{color:#6b796f;font-size:12px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.wide{grid-column:1/-1}label{display:block;font-size:13px}input,select{width:100%;font:inherit;border:1px solid #cad2cb;border-radius:5px;padding:8px;margin-top:5px;background:#fff;color:#24392c}.path{display:flex;gap:5px}.path button{white-space:nowrap;margin-top:5px}.check{display:flex;gap:8px;align-items:center;margin:16px 0}.check input{width:auto;margin:0}.identity{display:flex;align-items:center;gap:8px;padding:14px 0;border-top:1px solid #ecefec}.identity>div{flex:1}.identity p{margin:3px 0;color:#6b796f;font-size:12px}#progress-box{display:flex;align-items:center;gap:14px;margin:12px 0}progress{accent-color:#266450;width:35%}footer{position:fixed;bottom:0;height:52px;left:0;right:0;background:#fff;border-top:1px solid #ddd;display:flex;align-items:center;gap:15px;padding:0 18px;font-size:12px}footer span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}footer button{padding:5px 12px}#add-result{margin-left:12px;color:#496050}[hidden]{display:none!important}@media(max-width:950px){.version{display:none}.grid{grid-template-columns:1fr}.wide{grid-column:auto}}
+*{box-sizing:border-box}
+body{margin:0;background:#f7f8f6;color:#23362c;font:14px/1.55 "Segoe UI","Microsoft YaHei",sans-serif}
+main{max-width:720px;margin:auto;padding:26px 24px 18px}
+.intro{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:20px}
+h1{font-size:24px;line-height:1.4;margin:0 0 5px;letter-spacing:-.4px}
+h2{font-size:15px;margin:0;font-weight:600}
+p{margin:7px 0;color:#637067;font-size:13px}
+.version{font-size:12px;color:#768379;white-space:nowrap;padding-top:8px}
+.card{border:1px solid #dce2dc;background:#fff;border-radius:10px;padding:18px 20px;margin:12px 0}
+.section-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
+button{font:inherit;font-size:13px;border:1px solid #d2dbd3;border-radius:6px;background:#fff;color:#365344;padding:6px 10px;cursor:pointer}
+button:hover{background:#eff4ef}
+button:focus-visible,input:focus-visible{outline:2px solid #35725b;outline-offset:3px}
+button:disabled{opacity:.55;cursor:wait}
+button.primary{background:#28624e;border-color:#28624e;color:#fff}
+.hub-status{display:flex;align-items:center;gap:8px;font-weight:600}
+.hub-status::before{content:"";width:9px;height:9px;border-radius:50%;background:#a4aba5;flex-shrink:0}
+.hub-status[data-running="true"]::before{background:#2b825d}
+.identities{margin-top:12px;max-height:150px;overflow-y:auto}
+.identity{display:flex;align-items:center;justify-content:space-between;gap:15px;padding:8px 0;border-top:1px solid #edf0ec;font-size:13px}
+.identity strong{font-weight:500;overflow-wrap:anywhere}
+.identity span{color:#6b786e;font-size:12px;text-align:right;flex-shrink:0}
+.muted{font-size:12px;color:#768079;margin-top:10px}
+.setting{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;padding:12px 0}
+.setting+.setting{border-top:1px solid #edf0ec}
+.setting strong{font-weight:500;font-size:14px;display:block}
+.setting small{font-size:12px;color:#718075;display:block;margin-top:4px;line-height:1.6}
+.setting input{accent-color:#28624e;flex-shrink:0;width:18px;height:18px;margin:3px 0 0;cursor:pointer}
+#progress-box{display:flex;flex-direction:column;gap:5px;margin-top:10px}
+progress{accent-color:#28624e;width:100%;height:9px}
+#progress-label{font-size:12px;color:#647568}
+#update-result{margin-bottom:0;font-size:13px;overflow-wrap:anywhere}
+#open-update{margin-top:12px}
+.help-row{display:flex;align-items:flex-start;gap:12px;margin-top:14px}
+.help-row button{flex-shrink:0}
+#notice{font-size:12px;margin:5px 0;overflow-wrap:anywhere}
+[hidden]{display:none!important}
+@media(max-width:480px){main{padding:20px 14px}.card{padding:16px}.intro{gap:8px}h1{font-size:21px}.version{padding-top:6px;font-size:11px}}
