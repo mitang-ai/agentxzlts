@@ -42,9 +42,11 @@ test("一键创建、保存提示、复制、退出后用生成账密重新登�
     await expect(dialog).toBeVisible();
     await dialog.getByRole("button", { name: "复制账号和密码" }).click();
     const copied = await page.evaluate(() => navigator.clipboard.readText());
-    expect(copied === `协作岛登录账号：${email}\n登录密码：${password}`).toBe(
-      true,
-    );
+    // Windows clipboard converts LF to CRLF, without changing credentials.
+    expect(
+      copied.replaceAll("\r\n", "\n") ===
+        `协作岛登录账号：${email}\n登录密码：${password}`,
+    ).toBe(true);
     for (const viewport of [
       { width: 1366, height: 768 },
       { width: 320, height: 568 },
