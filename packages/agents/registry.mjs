@@ -330,6 +330,71 @@ export const registryMethods = {
       return { ok: true, reconnect: true };
     });
   },
+  async withdrawAgentRoom(userId, input) {
+    const d = z
+      .object({ node_id: id, participant_id: id })
+      .strict()
+      .parse(input);
+    return this.transaction(async (db) => {
+      await this.ownedNode(db, userId, d.node_id);
+      const n = await this.lockNodeRooms(db, d.node_id);
+      if (!n.platform_scope) fail(409, "旧版单房间身份请撤销设备后重新注册。");
+      const seat = (
+        await db.query(
+          "select s.*,p.room_id from agent_seats s join participants p on p.id=s.participant_id where s.node_id=$1 and s.participant_id=$2 and s.deleted_at is null for update of s",
+          [n.id, d.participant_id],
+        )
+      ).rows[0];
+      if (!seat) fail(404, "此设备的房间授权不存在。");
+      if (["revoked", "rejected"].includes(seat.state))
+        return { ok: true, already_withdrawn: true };
+      await db.query(
+        "update agent_seats set state='revoked' where participant_id=$1",
+        [seat.participant_id],
+      );
+      await db.query(
+        "update participants set status='left',last_active_at=null where id=$1",
+        [seat.participant_id],
+      );
+      await db.query(
+        "update agent_nodes set active_seat_id=null,session_id=null,last_seen_at=null,ready_until=null,connection_client_id=null where id=$1 and active_seat_id=$2",
+        [n.id, seat.participant_id],
+      );
+      await db.query(
+        "update agent_private_reviews r set status='rejected',payload_cipher='' from agent_turns t where r.turn_id=t.id and t.participant_id=$1 and r.status='pending'",
+        [seat.participant_id],
+      );
+      await db.query(
+        "update agent_turns set status='cancelled',lease_hash=null,error='设备所有者退出此房间' where participant_id=$1 and status in ('queued','leased','awaiting_review')",
+        [seat.participant_id],
+      );
+      await db.query(
+        "update rooms set agent_host_participant_id=null where id=$1 and agent_host_participant_id=$2",
+        [seat.room_id, seat.participant_id],
+      );
+      await this.pauseAffected(
+        db,
+        seat.room_id,
+        seat.participant_id,
+        "设备所有者退出此房间。",
+      );
+      await this.emit(
+        db,
+        seat.room_id,
+        "participant.left",
+        null,
+        seat.participant_id,
+      );
+      await this.emit(
+        db,
+        seat.room_id,
+        "agent.seat.updated",
+        null,
+        seat.participant_id,
+      );
+      return { ok: true };
+    });
+  },
   async revokeMyAgent(userId, nodeId) {
     return this.transaction(async (db) => {
       await this.ownedNode(db, userId, nodeId);

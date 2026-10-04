@@ -676,7 +676,7 @@ export class AgentService {
           [seat.participant_id, action === "reject" ? "rejected" : "revoked"],
         );
         await db.query(
-          "update agent_nodes set revoked_at=case when platform_scope then revoked_at else now() end,session_id=case when not platform_scope or active_seat_id=$2 then null else session_id end,last_seen_at=case when not platform_scope or active_seat_id=$2 then null else last_seen_at end,active_seat_id=case when active_seat_id=$2 then null else active_seat_id end where id=$1",
+          "update agent_nodes set revoked_at=case when platform_scope then revoked_at else now() end,session_id=case when not platform_scope or active_seat_id=$2 then null else session_id end,last_seen_at=case when not platform_scope or active_seat_id=$2 then null else last_seen_at end,ready_until=case when not platform_scope or active_seat_id=$2 then null else ready_until end,active_seat_id=case when active_seat_id=$2 then null else active_seat_id end where id=$1",
           [seat.node_id, seat.participant_id],
         );
         await db.query(
@@ -685,6 +685,10 @@ export class AgentService {
         );
         await db.query(
           "update agent_turns set status='cancelled',lease_hash=null,error='席位已撤销' where participant_id=$1 and status in ('queued','leased','awaiting_review')",
+          [seat.participant_id],
+        );
+        await db.query(
+          "update agent_private_reviews r set status='rejected',payload_cipher='' from agent_turns t where r.turn_id=t.id and t.participant_id=$1 and r.status='pending'",
           [seat.participant_id],
         );
         if (room.agent_host_participant_id === seat.participant_id)

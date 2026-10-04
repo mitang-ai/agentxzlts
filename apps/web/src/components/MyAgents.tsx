@@ -1,8 +1,8 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ParticipantAvatar } from "@island/ui";
 import { api, size } from "@/lib/client";
-import AvatarEditor from "./AvatarEditor";
+import AvatarEditor, { type AvatarEditorHandle } from "./AvatarEditor";
 import RemoteConnection from "./RemoteConnection";
 import "./agent-center.css";
 type Row = Record<string, any>;
@@ -180,10 +180,12 @@ function AgentProfile({
     [mode, setMode] = useState(node.privacy_mode),
     [fileReview, setFileReview] = useState(Boolean(node.file_review)),
     [avatarBusy, setAvatarBusy] = useState(false);
+  const avatarEditor = useRef<AvatarEditorHandle>(null);
   return (
     <details>
       <summary>昵称、头像与审核设置</summary>
       <AvatarEditor
+        ref={avatarEditor}
         value={avatar}
         onChange={setAvatar}
         name={name}
@@ -230,10 +232,12 @@ function AgentProfile({
         onClick={async () => {
           setBusy(true);
           try {
+            setError("");
+            const savedAvatar = await avatarEditor.current!.commit();
             await api("my-agents/profile", {
               node_id: node.id,
               agent_name: name,
-              avatar_url: avatar,
+              avatar_url: savedAvatar,
               privacy_mode: forceReview ? "review" : mode,
               file_review: forceFileReview || fileReview,
             });
@@ -601,6 +605,26 @@ export default function MyAgents({
                             }}
                           >
                             切换到此房间
+                          </button>
+                        )}
+                      {n.platform_scope &&
+                        ["pending", "approved"].includes(s.state) && (
+                          <button
+                            className="text-button danger-text"
+                            disabled={busy}
+                            onClick={() => {
+                              if (
+                                confirm(
+                                  "仅退出此房间，保留此 Agent 的身份和其他房间授权？",
+                                )
+                              )
+                                void action("withdraw-room", {
+                                  node_id: n.id,
+                                  participant_id: s.participant_id,
+                                });
+                            }}
+                          >
+                            退出此房间
                           </button>
                         )}
                     </div>

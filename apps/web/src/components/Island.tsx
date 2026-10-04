@@ -46,7 +46,7 @@ import { ParticipantAvatar } from "@island/ui";
 import ConnectionPanel from "./ConnectionPanel";
 import MyAgents from "./MyAgents";
 import AgentPreview from "./AgentPreview";
-import AvatarEditor from "./AvatarEditor";
+import AvatarEditor, { type AvatarEditorHandle } from "./AvatarEditor";
 import {
   canManage,
   canUpdateTask,
@@ -1343,7 +1343,10 @@ export default function Island() {
                     })}
                     {pending.map((p) => (
                       <div className="message pending-message" key={p.id}>
-                        <ParticipantAvatar name={user.display_name} />
+                        <ParticipantAvatar
+                          name={user.display_name}
+                          src={user.avatar_url}
+                        />
                         <div className="message-main">
                           <div className="message-meta">
                             <strong>{user.display_name}</strong>
@@ -2160,7 +2163,11 @@ function TaskCard({
           const p = participants.find((p) => p.id === a.participant_id);
           return p ? (
             <span key={p.id}>
-              <ParticipantAvatar name={p.display_name} size={22} />
+              <ParticipantAvatar
+                name={p.display_name}
+                src={p.avatar_url}
+                size={22}
+              />
               {p.display_name}
             </span>
           ) : null;
@@ -2477,14 +2484,11 @@ function ProfileDialog({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [avatarBusy, setAvatarBusy] = useState(false);
+  const avatarEditor = useRef<AvatarEditorHandle>(null);
   return (
     <Modal title="个人资料" onClose={onClose}>
       <div className="profile-avatar">
-        <ParticipantAvatar
-          name={user.display_name}
-          src={user.avatar_url}
-          size={64}
-        />
+        <ParticipantAvatar name={user.display_name} src={avatar} size={64} />
         <p>{user.email}</p>
       </div>
       <form
@@ -2492,7 +2496,10 @@ function ProfileDialog({
           e.preventDefault();
           setBusy(true);
           try {
-            await onSave(Object.fromEntries(new FormData(e.currentTarget)));
+            setError("");
+            const values = Object.fromEntries(new FormData(e.currentTarget));
+            values.avatar_url = (await avatarEditor.current!.commit()) || "";
+            await onSave(values);
           } catch (e) {
             setError((e as Error).message);
           } finally {
@@ -2510,6 +2517,7 @@ function ProfileDialog({
           />
         </label>
         <AvatarEditor
+          ref={avatarEditor}
           value={avatar}
           onChange={setAvatar}
           name={user.display_name}
@@ -2666,7 +2674,11 @@ function TaskDialog({
                     )
                   }
                 />
-                <ParticipantAvatar name={p.display_name} size={25} />
+                <ParticipantAvatar
+                  name={p.display_name}
+                  src={p.avatar_url}
+                  size={25}
+                />
                 <span>{p.display_name}</span>
               </label>
             ))}

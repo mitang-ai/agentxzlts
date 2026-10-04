@@ -62,6 +62,94 @@ afterAll(async () => {
   if (root) await rm(root, { recursive: true, force: true });
 });
 
+it("普通设备所有者可单独退出批准/待批/冻结房间，不能操作别人的设备，其它房间和原 token 保留", async () => {
+  const second = (
+    await human(users[1], "create_room", { name: "独立退出另一个房间" })
+  ).id;
+  try {
+    const invite = await service.createPairing(users[1]);
+    const node = await service.pair({
+      code: invite.code,
+      node_name: "单房间退出",
+      agent_name: "单房间退出",
+      adapter: "cli",
+      fingerprint: randomUUID(),
+      capabilities: {},
+    });
+    const a = await service.addAgentToRoom(users[1], room, node.node_id);
+    const b = await service.addAgentToRoom(users[1], second, node.node_id);
+    await service.seatAction(users[0], room, "approve", {
+      participant_id: a.participant_id,
+    });
+    await service.seatAction(users[1], second, "approve", {
+      participant_id: b.participant_id,
+    });
+    const connection = await service.connect(node.token);
+    await expect(
+      service.withdrawAgentRoom(users[2], {
+        node_id: node.node_id,
+        participant_id: a.participant_id,
+      }),
+    ).rejects.toMatchObject({ status: 404 });
+    await service.withdrawAgentRoom(users[1], {
+      node_id: node.node_id,
+      participant_id: a.participant_id,
+    });
+    expect(
+      (
+        await pool.query(
+          "select revoked_at,active_seat_id,ready_until from agent_nodes where id=$1",
+          [node.node_id],
+        )
+      ).rows[0],
+    ).toEqual({ revoked_at: null, active_seat_id: null, ready_until: null });
+    expect(
+      (
+        await pool.query(
+          "select state from agent_seats where participant_id=$1",
+          [b.participant_id],
+        )
+      ).rows[0].state,
+    ).toBe("approved");
+    await expect(
+      service.nodeSync(node.token, connection.session_id, 0, null),
+    ).rejects.toMatchObject({ code: "CONNECTION_REPLACED" });
+    await service.selectAgentRoom(users[1], {
+      node_id: node.node_id,
+      participant_id: b.participant_id,
+      fresh_context: true,
+    });
+    expect((await service.connect(node.token)).room_id).toBe(second);
+    const rejoin = await service.addAgentToRoom(users[1], room, node.node_id);
+    expect(rejoin.participant_id).not.toBe(a.participant_id);
+    await pool.query("update rooms set status='frozen' where id=$1", [room]);
+    await service.withdrawAgentRoom(users[1], {
+      node_id: node.node_id,
+      participant_id: rejoin.participant_id,
+    });
+    expect(
+      (
+        await service.withdrawAgentRoom(users[1], {
+          node_id: node.node_id,
+          participant_id: rejoin.participant_id,
+        })
+      ).already_withdrawn,
+    ).toBe(true);
+    expect(
+      (
+        await pool.query(
+          "select state from agent_seats where participant_id=$1",
+          [b.participant_id],
+        )
+      ).rows[0].state,
+    ).toBe("approved");
+    await service.revokeMyAgent(users[1], node.node_id);
+  } finally {
+    await pool.query("update rooms set status='active' where id=$1", [room]);
+    await pool.query("delete from rooms where id=$1", [second]);
+  }
+});
+
 it("旧房间邀请重新生成改为用户级邀请，不再创建新房间绑定身份", async () => {
   const old = await service.createPairing(users[1], room);
   const fresh = await service.invitationAction(users[1], {

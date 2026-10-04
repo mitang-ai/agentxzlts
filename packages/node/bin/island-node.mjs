@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFile, writeFile, mkdir, access } from "node:fs/promises";
+import { readFile, writeFile, mkdir, access, realpath } from "node:fs/promises";
 import { resolve, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline/promises";
@@ -205,6 +205,8 @@ async function init() {
       }
     }
     await createAdapter(config).discover();
+    if (args.includes("--hub"))
+      config.hub_root = resolve(import.meta.dirname, "../../..");
     await writeJSON(file, config);
     console.log("本地授权与配置已保存，网站不会收到本机目录或模型凭据。");
     return config;
@@ -213,6 +215,23 @@ async function init() {
   }
 }
 async function pair(config) {
+  if (args.includes("--hub") && !config.hub_root)
+    throw Error(
+      "此未配对配置未启用统一客户端，请用 init --hub 明确配置后再配对。",
+    );
+  if (config.hub_root) {
+    const folder = await realpath(dirname(file));
+    const root = await realpath(resolve(import.meta.dirname, "../../.."));
+    if (
+      dirname(folder) !== resolve(root, ".data/connections") ||
+      !/^[a-zA-Z0-9-]{16,80}$/.test(
+        folder.slice(
+          folder.lastIndexOf(process.platform === "win32" ? "\\" : "/") + 1,
+        ),
+      )
+    )
+      throw Error("统一客户端配对前需要有效的独立连接配置路径。");
+  }
   if (config.token && !args.includes("--re-pair"))
     throw Error(
       "此配置已配对，不能重复配对；新增 Agent 请使用独立配置，仅凭据失效时使用 pair --re-pair。",
@@ -256,6 +275,22 @@ async function pair(config) {
   return saved;
 }
 async function start(config) {
+  if (config?.hub_root) {
+    const { startBackground } = await import("../src/runtime.mjs");
+    await instanceLease?.release();
+    instanceLease = null;
+    console.log(
+      JSON.stringify(
+        await startBackground(
+          file,
+          resolve(import.meta.dirname, "island-node.mjs"),
+        ),
+        null,
+        2,
+      ),
+    );
+    return;
+  }
   if (!config?.token) throw Error("请先运行 init 和 pair 完成本机配置与配对。");
   const { IslandNode } = await import("../src/client.mjs");
   const node = new IslandNode(config, { configFile: file, instanceLease });
@@ -273,6 +308,10 @@ async function start(config) {
 let instanceLease, runningNode;
 function verifyExisting(config) {
   if (!config?.token) return;
+  if (args.includes("--hub") && !config.hub_root)
+    throw Error(
+      "旧版身份不能静默迁移到统一客户端。请先停止原实例并备份，或为新 Agent 创建独立邀请。",
+    );
   if (
     args.includes("--workbuddy-engine") &&
     (config.adapter !== "acp" || config.workbuddy_engine !== true)
@@ -365,7 +404,7 @@ try {
   }
   if (command === "help" || args.includes("--help"))
     console.log(
-      "协作岛异地 Node\n  bootstrap  自动准备依赖、配置、配对并连接\n  init       设置本机 Agent 与明确授权的工作目录\n  pair       用我的 Agent 配对码登记身份\n  start      连接并等待受控发言/任务；--background 保持常驻\n  stop       只停止本配置对应的常驻进程\n  status     查看已核实的连接状态（隐藏凭据）\n  doctor     查看配置、在线证明与旧版进程诊断\n  pull       下载房间成果 ZIP，需 --file 文件 ID --out 保存路径\n支持 --config 本机配置文件；自动连接可用 --non-interactive --server 地址 --code 配对码 --adapter 类型 --workspace 目录 --name 设备名称 --agent-name 昵称；Windows 可明确使用 --adapter acp --workbuddy-engine，运行 WorkBuddy 自带独立引擎而非现有 GUI 对话；默认仅讨论，--allow-development 明确授权开发，--no-development 仅讨论；Ctrl+C 停止前台实例，后台实例用 stop。MCP 是手动工具，不会自动唤醒 GUI 对话。",
+      "协作岛异地 Node\n  bootstrap  自动准备依赖、配置、配对并连接\n  init       设置本机 Agent 与明确授权的工作目录\n  pair       用我的 Agent 配对码登记身份\n  start      连接并等待受控发言/任务；--background 保持常驻\n  hub-status 查看统一客户端全部身份\n  hub-stop   停止统一客户端（保留身份与成果）\n  stop       只停止本配置对应的常驻进程\n  status     查看已核实的连接状态（隐藏凭据）\n  doctor     查看配置、在线证明与旧版进程诊断\n  pull       下载房间成果 ZIP，需 --file 文件 ID --out 保存路径\n支持 --hub 使用统一客户端、--config 本机配置文件；自动连接可用 --non-interactive --server 地址 --code 配对码 --adapter 类型 --workspace 目录 --name 设备名称 --agent-name 昵称；Windows 可明确使用 --adapter acp --workbuddy-engine，运行 WorkBuddy 自带独立引擎而非现有 GUI 对话；默认仅讨论，--allow-development 明确授权开发，--no-development 仅讨论；Ctrl+C 停止前台实例，后台实例用 stop。MCP 是手动工具，不会自动唤醒 GUI 对话。",
     );
   else if (command === "bootstrap") {
     let config = await readJSON(file);
@@ -450,6 +489,28 @@ try {
         ),
       );
     } else await start(config);
+  } else if (command === "hub-run") {
+    await prepare();
+    const { LocalHub } = await import("../src/hub.mjs");
+    const hub = new LocalHub(resolve(import.meta.dirname, "../../.."));
+    for (const signal of ["SIGINT", "SIGTERM"])
+      process.once(signal, () => {
+        void hub.stop();
+      });
+    await hub.start();
+  } else if (["hub-status", "hub-stop"].includes(command)) {
+    const { hubFile } = await import("../src/hub.mjs");
+    const { controlRequest } = await import("../src/runtime.mjs");
+    console.log(
+      JSON.stringify(
+        await controlRequest(
+          hubFile(resolve(import.meta.dirname, "../../..")),
+          command === "hub-stop" ? "stop" : "status",
+        ),
+        null,
+        2,
+      ),
+    );
   } else if (command === "stop") {
     const { controlRequest } = await import("../src/runtime.mjs");
     await controlRequest(file, "stop");

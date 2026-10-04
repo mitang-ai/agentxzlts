@@ -7,6 +7,7 @@ export class AgentService {
   updateAgent(userId: string, input: any): Promise<any>;
   addAgentToRoom(userId: string, roomId: string, nodeId: string): Promise<any>;
   selectAgentRoom(userId: string, input: any): Promise<any>;
+  withdrawAgentRoom(userId: string, input: unknown): Promise<any>;
   revokeMyAgent(userId: string, nodeId: string): Promise<any>;
   invitationAction(userId: string, input: any): Promise<any>;
   reviewPrivate(userId: string, input: any): Promise<any>;

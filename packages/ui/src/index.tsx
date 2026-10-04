@@ -51,11 +51,18 @@ export function ParticipantAvatar({
 export function ConnectionSeat({
   participant,
 }: {
-  participant: { display_name: string; type: "human" | "agent" };
+  participant: {
+    display_name: string;
+    type: "human" | "agent";
+    avatar_url?: string | null;
+  };
 }) {
   return (
     <div className="connection-seat">
-      <ParticipantAvatar name={participant.display_name} />
+      <ParticipantAvatar
+        name={participant.display_name}
+        src={participant.avatar_url}
+      />
       <span>{participant.display_name}</span>
       <small>{participant.type === "agent" ? "Agent" : "成员"}</small>
     </div>

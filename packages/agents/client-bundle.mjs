@@ -23,10 +23,28 @@ $info.WorkingDirectory = $repoDir
 $info.UseShellExecute = $false
 $info.CreateNoWindow = $true
 $info.Arguments = (($arguments | ForEach-Object { Quote-NodeArgument $_ }) -join ' ')
+$oneShot = ($nodeArguments -contains '--non-interactive') -or ($nodeArguments -contains '--background') -or (@('status','stop','doctor','hub-status','hub-stop','help') -contains $nodeArguments[0])
+if ($oneShot) {
+  # 隐藏窗口不能依赖继承的控制台句柄。并行读取两个管道，避免 WaitForExit / stdout 死锁。
+  $info.RedirectStandardOutput = $true
+  $info.RedirectStandardError = $true
+  $info.RedirectStandardInput = $true
+  $info.StandardOutputEncoding = $utf8Encoding
+  $info.StandardErrorEncoding = $utf8Encoding
+}
 $child = New-Object System.Diagnostics.Process
 $child.StartInfo = $info
 if (!$child.Start()) { throw 'Node 客户端未能启动。' }
+if ($oneShot) {
+  $child.StandardInput.Close()
+  $outputTask = $child.StandardOutput.ReadToEndAsync()
+  $errorTask = $child.StandardError.ReadToEndAsync()
+}
 $child.WaitForExit()
+if ($oneShot) {
+  [Console]::Out.Write($outputTask.Result)
+  [Console]::Error.Write($errorTask.Result)
+}
 exit $child.ExitCode
 `;
 export async function nodeClientBundle(root) {
@@ -42,6 +60,7 @@ export async function nodeClientBundle(root) {
     "packages/node/src/instances.mjs",
     "packages/node/src/windows-command.mjs",
     "packages/node/src/runtime.mjs",
+    "packages/node/src/hub.mjs",
     "packages/node/src/workspace.mjs",
     "packages/node/src/installation.mjs",
     "packages/node/src/maintenance.mjs",
@@ -73,14 +92,17 @@ export async function nodeClientBundle(root) {
       ),
     ),
   );
-  const shell = (
-    await readFile(
-      /* turbopackIgnore: true */ resolve(root, "install.sh"),
-      "utf8",
+  files.set("CLIENT_VERSION.txt", Buffer.from("hub-1\n"));
+  const shell =
+    // A shared installation is reused by later invitations; identities remain private independent configs.
+    (
+      await readFile(
+        /* turbopackIgnore: true */ resolve(root, "install.sh"),
+        "utf8",
+      )
     )
-  )
-    .replace(/^\uFEFF/, "")
-    .replace(/\r\n/g, "\n");
+      .replace(/^\uFEFF/, "")
+      .replace(/\r\n/g, "\n");
   files.set(
     "connect.sh",
     Buffer.from(
@@ -134,7 +156,7 @@ export async function nodeClientBundle(root) {
   files.set(
     "README.txt",
     windowsText(
-      '协作岛异地 Node 客户端\nWindows：双击 connect.cmd\nLinux/macOS：bash connect.sh\n在此设备准备本机 Agent（Codex、Claude Code、OpenCode 或标准 ACP/CLI/本机 Agent 服务），启动文件会准备 Node.js 和客户端依赖。\n在“我的 Agent”生成一次性配对码，登记后添加到各房间，由各房间主持人批准。\n使用安装说明指定的固定 --config；通常是 .data/connections/<安装标识>/config.json，不要混用默认配置或分享凭据。默认等待点名，不自动回复每条消息。\nconnect 启动器配合 --background 可常驻；manage.cmd/manage.sh 可调用 start --background --config、stop --config、status/doctor --config。关机结束，开机后需手动恢复，未安装开机自启。普通 MCP 不会自动唤醒 GUI。\n本机开发仅在明确授权的工作目录下按房间/任务隔离，原项目不会被自动覆盖。缓存清理 clean-cache 与旧安装 archive 默认只预览，加 --confirm 才操作，身份和成果不删除。\nWindows 复杂 --args JSON 建议从 PowerShell 调用 scripts/node-bootstrap.ps1 并使用单引号包裹 JSON，避免 cmd 多层引号解析。\n设备所有者可在配置 checks 中声明自己信任的本地验证命令，如 {"command":"npm","args":["test"],"timeout":60000}。未配置则清楚标为未验证。\n',
+      '协作岛统一本地客户端\nWindows：双击 connect.cmd\nLinux/macOS：bash connect.sh\n在此设备准备本机 Agent（Codex、Claude Code、OpenCode 或标准 ACP/CLI/本机 Agent 服务），启动文件会准备 Node.js 和客户端依赖。\n在“我的 Agent”生成一次性配对码，登记后添加到各房间，由各房间主持人批准。\n使用安装说明指定的固定 --config；通常是 .data/connections/<安装标识>/config.json，不要混用默认配置或分享凭据。默认等待点名，不自动回复每条消息。\nconnect 启动器配合 --background 可常驻；manage.cmd/manage.sh 可调用 hub-status 查看全部身份、hub-stop 停止整个客户端；单个身份仍用 start --background --config、stop --config、status/doctor --config。关机结束，开机后需手动恢复，未安装开机自启。普通 MCP 不会自动唤醒 GUI。\n本机开发仅在明确授权的工作目录下按房间/任务隔离，原项目不会被自动覆盖。缓存清理 clean-cache 与旧安装 archive 默认只预览，加 --confirm 才操作，身份和成果不删除。\nWindows 复杂 --args JSON 建议从 PowerShell 调用 scripts/node-bootstrap.ps1 并使用单引号包裹 JSON，避免 cmd 多层引号解析。\n设备所有者可在配置 checks 中声明自己信任的本地验证命令，如 {"command":"npm","args":["test"],"timeout":60000}。未配置则清楚标为未验证。\n',
     ),
   );
   return writeArchive(files);

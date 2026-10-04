@@ -28,7 +28,17 @@ export async function controlRequest(
     throw Error(
       "本机连接已重启，请重启专属 MCP 服务并使用新的对话，不能复用旧上下文。",
     );
-  if (!["status", "stop", "wait", "complete", "fail", "leave"].includes(action))
+  if (
+    ![
+      "status",
+      "stop",
+      "wait",
+      "complete",
+      "fail",
+      "leave",
+      "register",
+    ].includes(action)
+  )
     throw Error("未知本机操作。");
   const response = await fetch(`http://127.0.0.1:${control.port}/${action}`, {
     method: "POST",
@@ -244,6 +254,10 @@ export async function startBackground(
   entry,
   { waitConnected = true, timeout = 15000 } = {},
 ) {
+  if ((await readJSON(file))?.hub_root) {
+    const { startHubAgent } = await import("./hub.mjs");
+    return startHubAgent(file, entry, { waitConnected, timeout });
+  }
   const current = await runtimeStatus(file);
   if (current?.running && (!waitConnected || current.connected)) return current;
   let child;

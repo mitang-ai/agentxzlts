@@ -1,18 +1,36 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from "react";
 import { ParticipantAvatar } from "@island/ui";
 import { api } from "@/lib/client";
-export default function AvatarEditor({
-  value,
-  onChange,
-  name,
-  onBusyChange,
-}: {
-  value: string | null;
-  onChange: (url: string | null) => void;
-  name: string;
-  onBusyChange?: (busy: boolean) => void;
-}) {
+export type AvatarEditorHandle = { commit: () => Promise<string | null> };
+export default forwardRef<
+  AvatarEditorHandle,
+  {
+    value: string | null;
+    onChange: (url: string | null) => void;
+    name: string;
+    onBusyChange?: (busy: boolean) => void;
+  }
+>(function AvatarEditor(
+  {
+    value,
+    onChange,
+    name,
+    onBusyChange,
+  }: {
+    value: string | null;
+    onChange: (url: string | null) => void;
+    name: string;
+    onBusyChange?: (busy: boolean) => void;
+  },
+  ref,
+) {
   const canvas = useRef<HTMLCanvasElement>(null),
     image = useRef<ImageBitmap | null>(null),
     version = useRef(0);
@@ -22,6 +40,44 @@ export default function AvatarEditor({
     [ready, setReady] = useState(false),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
+  const uploading = useRef<Promise<string | null> | null>(null);
+  async function commit(): Promise<string | null> {
+    if (uploading.current) return uploading.current;
+    if (!ready) return value;
+    const ticket = version.current;
+    setBusy(true);
+    onBusyChange?.(true);
+    setError("");
+    const operation = (async () => {
+      try {
+        const surface = canvas.current;
+        if (!surface) throw Error("裁剪预览尚未就绪");
+        const blob = await new Promise<Blob>((resolve, reject) =>
+          surface.toBlob(
+            (b) => (b ? resolve(b) : reject(Error("裁剪失败"))),
+            "image/png",
+          ),
+        );
+        const form = new FormData();
+        form.append("file", blob, "avatar.png");
+        const result = await api<{ avatar_url: string }>("avatars", form);
+        if (ticket !== version.current) throw Error("头像已更改，请重新保存");
+        onChange(result.avatar_url);
+        setReady(false);
+        return result.avatar_url;
+      } catch (e) {
+        setError((e as Error).message);
+        throw e;
+      } finally {
+        uploading.current = null;
+        setBusy(false);
+        onBusyChange?.(false);
+      }
+    })();
+    uploading.current = operation;
+    return operation;
+  }
+  useImperativeHandle(ref, () => ({ commit }));
   useEffect(
     () => () => {
       version.current++;
@@ -62,6 +118,8 @@ export default function AvatarEditor({
             e.target.value = "";
             if (!file) return;
             const ticket = ++version.current;
+            setBusy(true);
+            onBusyChange?.(true);
             setError("");
             setReady(false);
             try {
@@ -87,6 +145,9 @@ export default function AvatarEditor({
               setReady(true);
             } catch (e) {
               setError((e as Error).message);
+            } finally {
+              setBusy(false);
+              onBusyChange?.(false);
             }
           }}
         />
@@ -95,7 +156,13 @@ export default function AvatarEditor({
         type="button"
         className="text-button"
         disabled={busy}
-        onClick={() => onChange(null)}
+        onClick={() => {
+          version.current++;
+          image.current?.close();
+          image.current = null;
+          setReady(false);
+          onChange(null);
+        }}
       >
         移除头像
       </button>
@@ -142,32 +209,7 @@ export default function AvatarEditor({
             type="button"
             className="secondary"
             disabled={busy}
-            onClick={async () => {
-              setBusy(true);
-              onBusyChange?.(true);
-              setError("");
-              try {
-                const blob = await new Promise<Blob>((resolve, reject) =>
-                  canvas.current?.toBlob(
-                    (b) => (b ? resolve(b) : reject(Error("裁剪失败"))),
-                    "image/png",
-                  ),
-                );
-                const form = new FormData();
-                form.append("file", blob, "avatar.png");
-                const result = await api<{ avatar_url: string }>(
-                  "avatars",
-                  form,
-                );
-                onChange(result.avatar_url);
-                setReady(false);
-              } catch (e) {
-                setError((e as Error).message);
-              } finally {
-                setBusy(false);
-                onBusyChange?.(false);
-              }
-            }}
+            onClick={() => void commit().catch(() => {})}
           >
             使用裁剪后的头像
           </button>
@@ -179,4 +221,4 @@ export default function AvatarEditor({
       {error && <p role="alert">{error}</p>}
     </div>
   );
-}
+});

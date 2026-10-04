@@ -145,7 +145,6 @@ test("用户级 Agent、一次性说明、本人审核、头像裁剪、共享�
     await expect(dialog.getByLabel("头像裁剪预览")).toBeVisible();
     await dialog.getByLabel("缩放").focus();
     await dialog.getByLabel("缩放").press("ArrowRight");
-    await dialog.getByRole("button", { name: "使用裁剪后的头像" }).click();
     await dialog.getByRole("button", { name: "保存资料" }).click();
     await expect(dialog).toHaveCount(0);
     const me = (await (await context.request.get("/api/auth/me")).json()).user;
@@ -172,7 +171,6 @@ test("用户级 Agent、一次性说明、本人审核、头像裁剪、共享�
       mimeType: "image/png",
       buffer: image,
     });
-    await device.getByRole("button", { name: "使用裁剪后的头像" }).click();
     await device.getByRole("button", { name: "保存 Agent 资料" }).click();
     await expect
       .poll(
@@ -190,6 +188,29 @@ test("用户级 Agent、一次性说明、本人审核、头像裁剪、共享�
     const seat = roomState.seats.find((s: any) => s.node_id === remote.node_id);
     expect(seat.avatar_url).toMatch(/^\/api\/avatars\//);
     expect(seat.display_name).toBe("独立身份的 Agent");
+    await expect(
+      page
+        .locator(".agent-device")
+        .filter({ hasText: "独立身份的 Agent" })
+        .locator('img[src="' + seat.avatar_url + '"]')
+        .first(),
+    ).toBeVisible();
+    await page.reload();
+    await expect(
+      page.locator('img[src="' + me.avatar_url + '"]').first(),
+    ).toBeVisible();
+    await expect
+      .poll(() =>
+        page
+          .locator('img[src="' + me.avatar_url + '"]')
+          .first()
+          .evaluate(
+            (img: HTMLImageElement) => img.complete && img.naturalWidth === 256,
+          ),
+      )
+      .toBe(true);
+    expect((await guest.request.get(me.avatar_url)).status()).toBe(200);
+    await page.getByRole("button", { name: "我的 Agent", exact: true }).click();
     client = new Client({ name: "privacy-browser-fixture", version: "1.0" });
     await client.connect(
       new StreamableHTTPClientTransport(new URL("/mcp", origin), {
@@ -264,6 +285,7 @@ test("用户级 Agent、一次性说明、本人审核、头像裁剪、共享�
     const settings = page
       .locator(".agent-device")
       .filter({ hasText: "独立身份的 Agent" });
+    await settings.getByText("昵称、头像与审核设置", { exact: true }).click();
     await settings.getByLabel("消息发送前由我审核", { exact: true }).uncheck();
     await settings.getByLabel("文件发送前由我审核", { exact: true }).check();
     await settings
@@ -330,6 +352,33 @@ test("用户级 Agent、一次性说明、本人审核、头像裁剪、共享�
       fullPage: true,
     });
     await page.setViewportSize({ width: 1280, height: 900 });
+    await post(context, "/api/my-agents/add-to-room", {
+      node_id: remote.node_id,
+      room_id: room2,
+    });
+    await page.getByRole("button", { name: "刷新", exact: true }).click();
+    const otherRoom = settings
+      .locator(".agent-actions")
+      .filter({ hasText: "第二个协作房间" });
+    page.once("dialog", (dialog) => dialog.accept());
+    await otherRoom
+      .getByRole("button", { name: "退出此房间", exact: true })
+      .click();
+    await expect
+      .poll(
+        async () =>
+          (
+            await (await context.request.get("/api/my-agents")).json()
+          ).seats.find(
+            (s: any) => s.node_id === remote.node_id && s.room_id === room2,
+          )?.state,
+      )
+      .toBe("revoked");
+    expect(
+      (
+        await (await context.request.get(`/api/rooms/${room}/agents`)).json()
+      ).seats.find((s: any) => s.node_id === remote.node_id).state,
+    ).toBe("approved");
     // The admin list includes devices registered in the lobby, not only room seats.
     const lobby = await post(context, "/api/my-agents/remote-connection", {
       host_name: "WorkBuddy",

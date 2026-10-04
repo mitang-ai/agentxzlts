@@ -280,6 +280,9 @@ async function handle(
             uuid.parse(input.node_id),
           );
           break;
+        case "withdraw-room":
+          result = await agents.withdrawAgentRoom(user.id, input);
+          break;
         case "select-room":
           result = await agents.selectAgentRoom(user.id, input);
           break;

@@ -861,6 +861,7 @@ it.runIf(process.platform === "win32")(
         "path-with-backslash\\",
       ];
       await script("node-bootstrap.ps1", [
+        "--hub",
         "--non-interactive",
         "--background",
         "--server",
@@ -885,10 +886,36 @@ it.runIf(process.platform === "win32")(
       expect(JSON.parse(await readFile(file, "utf8")).args).toEqual(args);
       expect((await runtimeStatus(file)).connected).toBe(true);
       expect(connections).toBe(1);
+      const registry = resolve(root, ".data/hub/registry.json");
+      const hub = await controlRequest(registry, "status");
+      expect(hub.agents).toHaveLength(1);
+      expect((await runtimeStatus(file)).pid).toBe(hub.pid);
       await script("node-manage.ps1", ["stop", "--config", file]);
       await eventually(async () => !(await runtimeStatus(file)));
+      await script("node-manage.ps1", ["hub-stop"]);
+      await eventually(async () => {
+        try {
+          process.kill(hub.pid, 0);
+          return false;
+        } catch {
+          return true;
+        }
+      });
     } finally {
       if (await runtimeStatus(file)) await controlRequest(file, "stop");
+      const registry = resolve(root, ".data/hub/registry.json");
+      const hub = await runtimeStatus(registry);
+      if (hub) {
+        await controlRequest(registry, "stop");
+        await eventually(async () => {
+          try {
+            process.kill(hub.pid, 0);
+            return false;
+          } catch {
+            return true;
+          }
+        });
+      }
       for (const socket of wire.clients) socket.terminate();
       wire.close();
       server.close();

@@ -272,7 +272,7 @@ describe.sequential(
       );
       expect(windowsScript).toContain("$OutputEncoding = $utf8Encoding");
       expect(utf8.decode(files.get("README.txt")!)).toContain(
-        "协作岛异地 Node 客户端",
+        "协作岛统一本地客户端",
       );
       expect(files.get("connect.cmd")!.toString()).toMatch(
         /^@echo off\r\nchcp 65001 >nul\r\n/,
